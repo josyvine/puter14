@@ -256,14 +256,16 @@ public class HeadlessAudioBridge {
     }
 
     public void dispatchTranscript(String text) {
+        if (text == null || text.trim().isEmpty()) return;
         mainHandler.post(() -> {
-            if (listener != null) listener.onTranscriptReceived(text);
+            if (listener != null) listener.onTranscriptReceived(text.trim());
         });
     }
 
     public void dispatchUserTranscript(String text) {
+        if (text == null || text.trim().isEmpty()) return;
         mainHandler.post(() -> {
-            if (listener != null) listener.onUserTranscriptReceived(text);
+            if (listener != null) listener.onUserTranscriptReceived(text.trim());
         });
     }
 
@@ -294,9 +296,17 @@ public class HeadlessAudioBridge {
     }
 
     public void dispatchError(String error) {
+        // Suppress non-fatal speech engine warning messages so the WebSocket live connection remains uninterrupted
+        if (error != null && (error.toLowerCase().contains("speech") || 
+                              error.toLowerCase().contains("no-speech") || 
+                              error.toLowerCase().contains("aborted"))) {
+            Log.w(TAG, "Suppressed non-fatal speech recognizer warning: " + error);
+            return;
+        }
+
         mainHandler.post(() -> {
             isSessionActive = false;
-            if (listener != null) listener.onError(error);
+            if (listener != null) listener.onError(error != null ? error : "Unknown live session error");
         });
     }
 }
