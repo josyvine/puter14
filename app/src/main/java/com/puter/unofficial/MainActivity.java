@@ -366,7 +366,13 @@ public class MainActivity extends AppCompatActivity {
 
             @Override
             public void onCommentaryFinished() {
-                onLiveSessionFinished();
+                // Finalize the current active bot bubble without prematurely terminating the live session
+                runOnUiThread(() -> {
+                    if (currentActiveLiveBotMsg != null) {
+                        currentActiveLiveBotMsg.setStreaming(false);
+                        currentActiveLiveBotMsg = null;
+                    }
+                });
             }
 
             @Override
@@ -487,17 +493,37 @@ public class MainActivity extends AppCompatActivity {
         });
     }
 
+    /**
+     * Completely strips model thoughts, meta-planning, headers, and asterisks.
+     * Ensures ONLY the actual spoken words reach the chat bubble.
+     */
     private String filterModelThoughts(String text) {
         if (text == null) return "";
         String clean = text;
+
+        // 1. Strip all blocks wrapped in double asterisks (e.g. **Acknowledging Ongoing Connectivity**)
+        clean = clean.replaceAll("\\*\\*[^*]*\\*\\*", "");
+
+        // 2. Strip planning/thought prefixes and lines
         clean = clean.replaceAll("(?i)Acknowledge the Greeting.*", "");
         clean = clean.replaceAll("(?i)Acknowledge Hindi Input.*", "");
         clean = clean.replaceAll("(?i)I've registered the user's.*", "");
         clean = clean.replaceAll("(?i)I recognize the .* command.*", "");
         clean = clean.replaceAll("(?i)My next step is a polite response.*", "");
+        clean = clean.replaceAll("(?i)Acknowledge [^\\n]*\\n?", "");
+        clean = clean.replaceAll("(?i)I've registered [^\\n]*\\n?", "");
+        clean = clean.replaceAll("(?i)My next step [^\\n]*\\n?", "");
+        clean = clean.replaceAll("(?i)I recognize [^\\n]*\\n?", "");
+
+        // 3. Remove stray asterisks
+        clean = clean.replace("*", "");
+
         return clean.trim();
     }
 
+    /**
+     * Receives Bot spoken live transcription and renders it on the LEFT side (ROLE_BOT).
+     */
     public void onLiveTranscriptReceived(String text) {
         if (text == null || text.trim().isEmpty()) return;
         if (text.startsWith("User: ")) {
@@ -515,6 +541,7 @@ public class MainActivity extends AppCompatActivity {
         runOnUiThread(() -> {
             if (tvLiveTranscriptTicker != null) tvLiveTranscriptTicker.setText(botContent);
 
+            // ROLE_BOT dynamically places message on the LEFT side via item_chat_assistant.xml
             if (currentActiveLiveBotMsg != null && currentActiveLiveBotMsg.isStreaming()) {
                 String existing = currentActiveLiveBotMsg.getText();
                 if (botContent.startsWith(existing)) {
@@ -542,18 +569,27 @@ public class MainActivity extends AppCompatActivity {
         });
     }
 
+    /**
+     * Receives User spoken live transcription and renders it on the RIGHT side (ROLE_USER).
+     */
     public void onLiveUserTranscriptReceived(String userText) {
         if (userText == null || userText.trim().isEmpty()) return;
+
+        // Sanitize user text of any stray asterisks or brackets
+        final String cleanUser = userText.replaceAll("\\*\\*[^*]*\\*\\*", "").replace("*", "").trim();
+        if (cleanUser.isEmpty()) return;
+
         runOnUiThread(() -> {
             if (currentActiveLiveBotMsg != null) {
                 currentActiveLiveBotMsg.setStreaming(false);
                 currentActiveLiveBotMsg = null;
             }
 
+            // ROLE_USER dynamically places message on the RIGHT side via item_chat_user.xml
             ChatMessage userMsg = new ChatMessage(
                     "msg_live_user_" + System.currentTimeMillis(),
                     ChatMessage.ROLE_USER,
-                    userText.trim(),
+                    cleanUser,
                     System.currentTimeMillis()
             );
             chatAdapter.addMessage(userMsg);
@@ -2907,3 +2943,4 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 }
+
