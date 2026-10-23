@@ -54,20 +54,20 @@ window.startCommentarySession = function(scriptText, personaPrompt) {
 
     let cleanModel = rawModel.replace(/^models\//, "").trim();
 
-    // Align model names with Google's active BidiGenerateContent endpoint to prevent instant disconnects
+    // Map live models to Google's active BidiGenerateContent endpoints
     if (cleanModel.toLowerCase().includes("native-audio") || 
         cleanModel.toLowerCase().includes("native audio") || 
         cleanModel.toLowerCase().includes("2.5-flash-native") ||
         cleanModel.toLowerCase().includes("2.5")) {
         cleanModel = "gemini-2.5-flash-native-audio-preview-12-2025";
     } else {
-        // Maps Gemini 3.1 Flash Live Preview and experimental live variants to the universal live WebSocket model
+        // Universal live model for Gemini 3.1 Flash Live Preview, 2.0 Flash Exp, etc.
         cleanModel = "gemini-2.0-flash-exp";
     }
 
-    currentPersona = "You are an intelligent real-time conversational AI voice assistant.";
+    currentPersona = "You are a concise, direct, spoken voice assistant. Speak naturally and conversationally. CRITICAL: Never verbalize internal thoughts, planning, agenda items, or meta-commentary (such as 'Acknowledge the Greeting' or 'My next step is...'). Speak only what should directly be heard by the user.";
     if (bridge && bridge.getCustomInstruction && bridge.getCustomInstruction().trim().length > 0) {
-        currentPersona = bridge.getCustomInstruction();
+        currentPersona += "\n" + bridge.getCustomInstruction().trim();
     }
 
     let voiceName = "Puck";
@@ -173,8 +173,22 @@ window.startCommentarySession = function(scriptText, personaPrompt) {
                 }
                 if (content.modelTurn && content.modelTurn.parts) {
                     for (const part of content.modelTurn.parts) {
-                        if (part.text && bridge && bridge.onLiveCommentaryText) {
-                            bridge.onLiveCommentaryText(part.text);
+                        // Discard internal thought parts so planning headers are never sent to native
+                        if (part.thought) {
+                            continue;
+                        }
+                        if (part.text) {
+                            let text = part.text;
+                            // Clean any leaked meta planning headers if present
+                            if (text.includes("Acknowledge ") || text.includes("I've registered ") || text.includes("My next step ")) {
+                                text = text.replace(/Acknowledge [^\n]+\n?/gi, '')
+                                           .replace(/I've registered [^\n]+\n?/gi, '')
+                                           .replace(/My next step [^\n]+\n?/gi, '')
+                                           .trim();
+                            }
+                            if (text && bridge && bridge.onLiveCommentaryText) {
+                                bridge.onLiveCommentaryText(text);
+                            }
                         }
                         if (part.inlineData && part.inlineData.mimeType && part.inlineData.mimeType.startsWith("audio/")) {
                             const base64Audio = part.inlineData.data;
@@ -444,7 +458,6 @@ function syncPuterTokenToNative(token, source) {
     if (!token || typeof token !== 'string' || token.trim().length === 0) return;
     const cleanToken = token.trim();
 
-    // Loop Breaker: abort immediately if this token was already synchronized
     if (cleanToken === lastSyncedTokenToNative) {
         return;
     }
@@ -468,7 +481,6 @@ function ensurePuterAuth() {
     let source = "";
 
     try {
-        // Layer 1: Check Puter SDK runtime instance in memory
         if (typeof puter !== 'undefined') {
             if (puter.authToken && typeof puter.authToken === 'string' && puter.authToken.length > 5) {
                 token = puter.authToken;
@@ -479,7 +491,6 @@ function ensurePuterAuth() {
             }
         }
 
-        // Layer 2: Check LocalStorage
         if (!token || token.trim().length === 0) {
             const lsToken = localStorage.getItem('puter.auth.token') || localStorage.getItem('token');
             if (lsToken && lsToken.trim().length > 5) {
@@ -488,7 +499,6 @@ function ensurePuterAuth() {
             }
         }
 
-        // Layer 3: Check Native Java AuthManager via Bridge
         if (!token || token.trim().length === 0) {
             if (bridge) {
                 if (bridge.getSavedAuthToken) {
@@ -501,7 +511,6 @@ function ensurePuterAuth() {
             }
         }
 
-        // If found anywhere, propagate and update SDK state
         if (token && token.trim().length > 0) {
             token = token.trim();
             try { localStorage.setItem('puter.auth.token', token); } catch(e) {}
