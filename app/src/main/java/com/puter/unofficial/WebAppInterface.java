@@ -93,6 +93,11 @@ public class WebAppInterface {
         return prefs.getString(AppConstants.KEY_CUSTOM_INSTRUCTION, "");
     }
 
+    @JavascriptInterface
+    public String getReplyLanguage() {
+        return prefs.getString(AppConstants.KEY_TARGET_LANGUAGE, "");
+    }
+
     // --- PUTER SDK AUTH SYNCHRONIZATION ---
 
     @JavascriptInterface
@@ -209,6 +214,16 @@ public class WebAppInterface {
         }
         if (mainActivity != null) {
             mainActivity.runOnUiThread(() -> mainActivity.onLiveTranscriptReceived(text));
+        }
+    }
+
+    @JavascriptInterface
+    public void onLiveUserTranscript(String text) {
+        if (audioBridge != null) {
+            audioBridge.dispatchUserTranscript(text);
+        }
+        if (mainActivity != null) {
+            mainActivity.runOnUiThread(() -> mainActivity.onLiveUserTranscriptReceived(text));
         }
     }
 
