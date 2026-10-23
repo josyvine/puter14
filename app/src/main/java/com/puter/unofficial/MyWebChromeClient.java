@@ -24,8 +24,6 @@ import android.widget.LinearLayout;
 
 import androidx.core.content.FileProvider;
 
-import com.puter.unofficial.logging.LiveLogManager;
-
 import java.io.File;
 import java.io.IOException;
 import java.text.SimpleDateFormat;
@@ -63,12 +61,10 @@ public class MyWebChromeClient extends WebChromeClient {
         switch (consoleMessage.messageLevel()) {
             case ERROR: 
                 Log.e("PuterJS", logMsg); 
-                LiveLogManager.getInstance().error("JS_CONSOLE", "JS Error", logMsg);
                 ActionReportLogger.logHtmlGlitch("JS_CONSOLE_ERROR", logMsg);
                 break;
             case WARNING: 
                 Log.w("PuterJS", logMsg); 
-                LiveLogManager.getInstance().warn("JS_CONSOLE", "JS Warning", logMsg);
                 ActionReportLogger.logHtmlGlitch("JS_CONSOLE_WARNING", logMsg);
                 break;
             default: 
@@ -88,7 +84,6 @@ public class MyWebChromeClient extends WebChromeClient {
         isAuthProcessing = false;
 
         triggerNativeLog("Auth Popup Requested by Puter SDK", "native");
-        LiveLogManager.getInstance().process("PUTER_AUTH", "Auth Popup Opened", "Puter SDK requested OAuth login window");
 
         // 1. Layout container with fail-safe Close Button + Popup WebView
         LinearLayout dialogLayout = new LinearLayout(activity);
@@ -101,7 +96,6 @@ public class MyWebChromeClient extends WebChromeClient {
         closeButton.setTextColor(Color.WHITE);
         closeButton.setOnClickListener(v -> {
             triggerNativeLog("Manual Close Triggered by User", "warn");
-            LiveLogManager.getInstance().warn("PUTER_AUTH", "Manual Window Close", "User tapped Close Button. Inspecting credentials...");
             closeAuthAndRefresh();
         });
 
@@ -147,12 +141,10 @@ public class MyWebChromeClient extends WebChromeClient {
 
             private boolean handlePopupUrl(WebView view, String url) {
                 triggerNativeLog("Popup Navigating: " + url, "info");
-                LiveLogManager.getInstance().info("PUTER_AUTH", "Popup Navigating", "URL: " + url);
 
                 // If redirected to Puter marketing homepage, force route to embedded SDK login prompt
                 if (isPuterMarketingLanding(url)) {
                     triggerNativeLog("Marketing page intercepted. Redirecting to Puter SDK Auth...", "warn");
-                    LiveLogManager.getInstance().warn("PUTER_AUTH", "Marketing Page Intercepted", "Redirecting back to SDK auth prompt");
                     java.util.Map<String, String> headers = new java.util.HashMap<>();
                     headers.put("Origin", "https://appassets.androidplatform.net");
                     headers.put("Referer", "https://appassets.androidplatform.net/");
@@ -169,7 +161,6 @@ public class MyWebChromeClient extends WebChromeClient {
                 super.onPageFinished(view, url);
                 CookieManager.getInstance().flush();
                 triggerNativeLog("Popup Page Loaded: " + url, "info");
-                LiveLogManager.getInstance().ok("PUTER_AUTH", "Popup Page Loaded", "URL: " + url);
 
                 if (isPuterMarketingLanding(url)) {
                     triggerNativeLog("Marketing page loaded. Redirecting to Puter SDK Auth...", "warn");
@@ -205,7 +196,6 @@ public class MyWebChromeClient extends WebChromeClient {
                 if (!isAuthProcessing) {
                     isAuthProcessing = true;
                     triggerNativeLog("SDK issued window.close() command", "native");
-                    LiveLogManager.getInstance().ok("PUTER_AUTH", "SDK window.close()", "Puter SDK signaled login complete");
                     closeAuthAndRefresh();
                 }
             }
@@ -247,7 +237,6 @@ public class MyWebChromeClient extends WebChromeClient {
         if (auth.isAuthCallback(url)) {
             isAuthProcessing = true;
             triggerNativeLog("Puter auth completion detected: " + url + ". Closing dialog...", "native");
-            LiveLogManager.getInstance().ok("PUTER_AUTH", "Auth Callback Matched", "URL: " + url);
             extractAndStorePuterAuthTokens();
             CookieManager.getInstance().flush();
             view.postDelayed(this::closeAuthAndRefresh, 400);
@@ -283,7 +272,6 @@ public class MyWebChromeClient extends WebChromeClient {
                 String clean = token.trim();
                 AuthManager.getInstance(activity).saveAuthToken(clean);
                 triggerNativeLog("Extracted Puter token directly from URL parameter", "native");
-                LiveLogManager.getInstance().ok("PUTER_AUTH", "Token Extracted from URL", "Length: " + clean.length() + " chars");
                 if (activity instanceof MainActivity) {
                     ((MainActivity) activity).syncPuterTokenToHeadless();
                 }
@@ -292,7 +280,7 @@ public class MyWebChromeClient extends WebChromeClient {
     }
 
     /**
-     * Inspects cookies from puter.com and synchronizes them to AuthManager with deep telemetry.
+     * Inspects cookies from puter.com and synchronizes them to AuthManager.
      */
     private void extractAndStorePuterAuthTokens() {
         if (activity == null) return;
@@ -322,7 +310,6 @@ public class MyWebChromeClient extends WebChromeClient {
                                 if (!val.isEmpty()) {
                                     AuthManager.getInstance(activity).saveAuthToken(val);
                                     triggerNativeLog("Saved Puter auth token from cookie [" + key + "]", "native");
-                                    LiveLogManager.getInstance().ok("PUTER_AUTH", "Token Saved from Cookie", "Key: " + key + " | Len: " + val.length());
                                     if (activity instanceof MainActivity) {
                                         ((MainActivity) activity).syncPuterTokenToHeadless();
                                     }
@@ -333,15 +320,8 @@ public class MyWebChromeClient extends WebChromeClient {
                     }
                 }
             }
-
-            if (!detectedKeys.isEmpty()) {
-                LiveLogManager.getInstance().info("PUTER_AUTH", "Cookies Scanned in Popup", "Keys found: " + detectedKeys);
-            } else {
-                LiveLogManager.getInstance().warn("PUTER_AUTH", "No Cookies in Popup", "CookieManager returned empty for puter.com");
-            }
         } catch (Exception e) {
             Log.e(TAG, "Failed extracting cookies: " + e.getMessage());
-            LiveLogManager.getInstance().error("PUTER_AUTH", "Cookie Extraction Error", e.getMessage());
         }
     }
 
@@ -359,13 +339,6 @@ public class MyWebChromeClient extends WebChromeClient {
                 auth.handleAuthCallback(lastAuthUrl);
             }
             auth.setLoggedIn(true);
-
-            String activeToken = auth.getAuthToken();
-            if (activeToken != null && !activeToken.trim().isEmpty()) {
-                LiveLogManager.getInstance().ok("PUTER_AUTH", "Popup Auth Success", "Active Token confirmed in AuthManager (length: " + activeToken.length() + ")");
-            } else {
-                LiveLogManager.getInstance().warn("PUTER_AUTH", "Popup Closed Without Token", "No credentials acquired from cookies or URL parameters.");
-            }
         }
 
         if (authDialog != null && authDialog.isShowing()) {
