@@ -31,6 +31,7 @@ let micAudioContext = null;
 let playbackAudioContext = null;
 let micMediaStream = null;
 let micScriptProcessor = null;
+let speechRecognizer = null;
 let isSessionActive = false;
 let currentPersona = "";
 let nextPlaybackTime = 0;
@@ -44,7 +45,7 @@ window.startCommentarySession = function(scriptText, personaPrompt) {
     const bridge = getBridge();
     const apiKey = bridge ? bridge.getGeminiApiKey() : "";
 
-    let rawModel = "gemini-3.1-flash-live-preview";
+    let rawModel = "gemini-2.0-flash-exp";
     if (personaPrompt && typeof personaPrompt === "string" && personaPrompt.trim().length > 0 && personaPrompt !== "auto") {
         rawModel = personaPrompt;
     } else if (bridge && bridge.getModelId && bridge.getModelId()) {
@@ -53,12 +54,15 @@ window.startCommentarySession = function(scriptText, personaPrompt) {
 
     let cleanModel = rawModel.replace(/^models\//, "").trim();
 
+    // Align model names with Google's active BidiGenerateContent endpoint to prevent instant disconnects
     if (cleanModel.toLowerCase().includes("native-audio") || 
         cleanModel.toLowerCase().includes("native audio") || 
-        cleanModel.toLowerCase().includes("2.5-flash-native")) {
+        cleanModel.toLowerCase().includes("2.5-flash-native") ||
+        cleanModel.toLowerCase().includes("2.5")) {
         cleanModel = "gemini-2.5-flash-native-audio-preview-12-2025";
     } else {
-        cleanModel = "gemini-3.1-flash-live-preview";
+        // Maps Gemini 3.1 Flash Live Preview and experimental live variants to the universal live WebSocket model
+        cleanModel = "gemini-2.0-flash-exp";
     }
 
     currentPersona = "You are an intelligent real-time conversational AI voice assistant.";
@@ -141,6 +145,7 @@ window.startCommentarySession = function(scriptText, personaPrompt) {
             if (payload.setupComplete) {
                 isSessionActive = true;
                 initMicrophoneCapture();
+                initSpeechRecognition();
                 if (bridge && bridge.onLiveSessionConnected) {
                     bridge.onLiveSessionConnected();
                 }
@@ -272,6 +277,10 @@ window.stopCommentarySession = function() {
 };
 
 function cleanupAudio() {
+    if (speechRecognizer) {
+        try { speechRecognizer.stop(); } catch(e) {}
+        speechRecognizer = null;
+    }
     if (micMediaStream) {
         try { micMediaStream.getTracks().forEach(t => t.stop()); } catch(e) {}
         micMediaStream = null;
@@ -347,6 +356,47 @@ function initMicrophoneCapture() {
             const bridge = getBridge();
             if (bridge && bridge.onLiveError) bridge.onLiveError("Microphone permission required for Live Voice: " + err.message);
         });
+}
+
+function initSpeechRecognition() {
+    const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRec) return;
+
+    try {
+        if (speechRecognizer) {
+            try { speechRecognizer.abort(); } catch(e) {}
+        }
+        speechRecognizer = new SpeechRec();
+        speechRecognizer.continuous = true;
+        speechRecognizer.interimResults = false;
+        speechRecognizer.maxAlternatives = 1;
+
+        speechRecognizer.onresult = function(event) {
+            for (let i = event.resultIndex; i < event.results.length; ++i) {
+                if (event.results[i].isFinal) {
+                    const text = event.results[i][0].transcript;
+                    if (text && text.trim().length > 0) {
+                        const bridge = getBridge();
+                        if (bridge && bridge.onLiveUserTranscript) {
+                            bridge.onLiveUserTranscript(text.trim());
+                        } else if (bridge && bridge.onLiveCommentaryText) {
+                            bridge.onLiveCommentaryText("User: " + text.trim());
+                        }
+                    }
+                }
+            }
+        };
+
+        speechRecognizer.onerror = function() {};
+
+        speechRecognizer.onend = function() {
+            if (isSessionActive && speechRecognizer) {
+                try { speechRecognizer.start(); } catch(e) {}
+            }
+        };
+
+        speechRecognizer.start();
+    } catch(e) {}
 }
 
 function playAudioChunk(base64Pcm) {
