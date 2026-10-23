@@ -90,6 +90,8 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * 100% Pure Native Android Java Activity for Puter Unofficial.
@@ -187,7 +189,7 @@ public class MainActivity extends AppCompatActivity {
     private String previousProviderBeforeLive = null;
     private boolean isLiveMode = false;
     private boolean isAutoMode = false;
-    private boolean isGenerating = false;
+    private volatile boolean isGenerating = false;
     private boolean isLiveVoiceConnected = false;
     private TextToSpeech textToSpeech;
     private SpeechRecognizer speechRecognizer;
@@ -485,9 +487,17 @@ public class MainActivity extends AppCompatActivity {
         });
     }
 
-    /**
-     * Renders incoming transcribed text from the live voice model directly into a Bot chat bubble.
-     */
+    private String filterModelThoughts(String text) {
+        if (text == null) return "";
+        String clean = text;
+        clean = clean.replaceAll("(?i)Acknowledge the Greeting.*", "");
+        clean = clean.replaceAll("(?i)Acknowledge Hindi Input.*", "");
+        clean = clean.replaceAll("(?i)I've registered the user's.*", "");
+        clean = clean.replaceAll("(?i)I recognize the .* command.*", "");
+        clean = clean.replaceAll("(?i)My next step is a polite response.*", "");
+        return clean.trim();
+    }
+
     public void onLiveTranscriptReceived(String text) {
         if (text == null || text.trim().isEmpty()) return;
         if (text.startsWith("User: ")) {
@@ -498,12 +508,20 @@ public class MainActivity extends AppCompatActivity {
             text = text.substring(5);
         }
 
-        final String botContent = text;
+        String sanitized = filterModelThoughts(text);
+        if (sanitized.isEmpty()) return;
+
+        final String botContent = sanitized;
         runOnUiThread(() -> {
             if (tvLiveTranscriptTicker != null) tvLiveTranscriptTicker.setText(botContent);
 
             if (currentActiveLiveBotMsg != null && currentActiveLiveBotMsg.isStreaming()) {
-                currentActiveLiveBotMsg.setText(currentActiveLiveBotMsg.getText() + " " + botContent);
+                String existing = currentActiveLiveBotMsg.getText();
+                if (botContent.startsWith(existing)) {
+                    currentActiveLiveBotMsg.setText(botContent);
+                } else if (!existing.contains(botContent)) {
+                    currentActiveLiveBotMsg.setText(existing + " " + botContent);
+                }
                 chatAdapter.notifyItemChanged(chatAdapter.getItemCount() - 1);
             } else {
                 currentActiveLiveBotMsg = new ChatMessage(
@@ -524,9 +542,6 @@ public class MainActivity extends AppCompatActivity {
         });
     }
 
-    /**
-     * Renders the user's spoken words into a native User chat bubble.
-     */
     public void onLiveUserTranscriptReceived(String userText) {
         if (userText == null || userText.trim().isEmpty()) return;
         runOnUiThread(() -> {
@@ -1073,6 +1088,29 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
+    /**
+     * Strips leading numbers/bullets (e.g. "1. ", "2) ") and percent-encodes raw spaces (%20)
+     */
+    private List<String> extractAndSanitizeUrls(String text) {
+        List<String> list = new ArrayList<>();
+        if (text == null || text.trim().isEmpty()) return list;
+
+        String[] lines = text.split("\\r?\\n");
+        for (String rawLine : lines) {
+            if (rawLine == null) continue;
+            String line = rawLine.replaceFirst("^\\s*\\d+[\\.\\)]\\s*", "").trim();
+            Matcher matcher = Pattern.compile("https?://\\S+").matcher(line);
+            while (matcher.find()) {
+                String match = matcher.group();
+                String encoded = match.replace(" ", "%20");
+                if (!list.contains(encoded)) {
+                    list.add(encoded);
+                }
+            }
+        }
+        return list;
+    }
+
     private void dispatchSendMessage() {
         String prompt = etMessageInput.getText().toString().trim();
         List<StagedFile> attachments = new ArrayList<>(stagedAttachmentsAdapter.getItems());
@@ -1083,6 +1121,25 @@ public class MainActivity extends AppCompatActivity {
         stagedAttachmentsAdapter.clear();
         rvStagedAttachments.setVisibility(View.GONE);
         updateSendButtonState();
+
+        // Check if any attached .txt file contains URLs to extract
+        List<String> collectedUrls = new ArrayList<>(extractAndSanitizeUrls(prompt));
+        for (StagedFile file : attachments) {
+            if (file.getMimeType() != null && (file.getMimeType().contains("text") || file.getName().endsWith(".txt") || file.getName().endsWith(".json"))) {
+                String dataUri = file.getBase64DataUri();
+                if (dataUri != null && dataUri.contains("base64,")) {
+                    try {
+                        String b64 = dataUri.substring(dataUri.indexOf("base64,") + 7);
+                        byte[] decoded = Base64.decode(b64, Base64.DEFAULT);
+                        String fileContent = new String(decoded, StandardCharsets.UTF_8);
+                        List<String> fromFile = extractAndSanitizeUrls(fileContent);
+                        for (String u : fromFile) {
+                            if (!collectedUrls.contains(u)) collectedUrls.add(u);
+                        }
+                    } catch (Exception ignored) {}
+                }
+            }
+        }
 
         ChatMessage userMsg = new ChatMessage(
                 "msg_user_" + System.currentTimeMillis(),
@@ -1143,17 +1200,166 @@ public class MainActivity extends AppCompatActivity {
         } catch (Exception ignored) {}
 
         boolean urlContextEnabled = prefs.getBoolean(AppConstants.KEY_URL_CONTEXT_ENABLED, false);
-        final String effectivePrompt = finalPrompt;
 
-        // If not a Gemini model and URL context is enabled, use local manual fallback scraping
-        if (urlContextEnabled && !isGeminiNativeModel(activeModelId) && prompt.matches(".*https?://\\S+.*")) {
+        // Check if batching (> 20 URLs) is required for Gemini
+        if (urlContextEnabled && isGeminiNativeModel(activeModelId) && collectedUrls.size() > 20) {
+            executeBatchedUrlContextAnalysis(collectedUrls, finalPrompt, assistantMsg);
+        } else if (urlContextEnabled && !isGeminiNativeModel(activeModelId) && !collectedUrls.isEmpty()) {
             new Thread(() -> {
-                String enriched = fetchUrlContextIfPresent(effectivePrompt);
+                String enriched = fetchUrlContextIfPresent(finalPrompt);
                 runOnUiThread(() -> routeGeneration(enriched, attachments, assistantMsg));
             }).start();
         } else {
-            routeGeneration(effectivePrompt, attachments, assistantMsg);
+            routeGeneration(finalPrompt, attachments, assistantMsg);
         }
+    }
+
+    /**
+     * Executes 20-by-batch sequential analysis and compiles the final unified A-to-Z repository report.
+     */
+    private void executeBatchedUrlContextAnalysis(List<String> allUrls, String userPrompt, ChatMessage assistantMsg) {
+        int batchSize = 20;
+        int totalBatches = (int) Math.ceil((double) allUrls.size() / batchSize);
+        List<String> intermediateFindings = new ArrayList<>();
+        List<GroundingSource> allSources = new ArrayList<>();
+
+        new Thread(() -> {
+            for (int b = 0; b < totalBatches; b++) {
+                if (!isGenerating) break;
+                int start = b * batchSize;
+                int end = Math.min(start + batchSize, allUrls.size());
+                List<String> batchUrls = allUrls.subList(start, end);
+                int currentBatchNum = b + 1;
+
+                runOnUiThread(() -> tvEcgStatus.setText("Analyzing Batch " + currentBatchNum + " of " + totalBatches + " (URLs " + (start + 1) + "–" + end + ")..."));
+
+                StringBuilder batchPromptBuilder = new StringBuilder();
+                batchPromptBuilder.append("You are analyzing a batch of repository files using the official URL Context tool.\n");
+                batchPromptBuilder.append("Analyze each of the following URLs thoroughly and extract technical details, exported components, logic, and purpose:\n\n");
+                for (String u : batchUrls) {
+                    batchPromptBuilder.append(u).append("\n");
+                }
+                batchPromptBuilder.append("\nProvide concise, highly dense intermediate research notes on these files.");
+
+                JSONObject payload = new JSONObject();
+                try {
+                    JSONArray contents = new JSONArray();
+                    JSONObject userPart = new JSONObject();
+                    userPart.put("role", "user");
+                    JSONArray parts = new JSONArray();
+                    JSONObject textPart = new JSONObject();
+                    textPart.put("text", batchPromptBuilder.toString());
+                    parts.put(textPart);
+                    userPart.put("parts", parts);
+                    contents.put(userPart);
+                    payload.put("contents", contents);
+
+                    JSONArray toolsArray = new JSONArray();
+                    JSONObject urlTool = new JSONObject();
+                    urlTool.put("url_context", new JSONObject());
+                    toolsArray.put(urlTool);
+                    payload.put("tools", toolsArray);
+                } catch (Exception ignored) {}
+
+                final Object batchLock = new Object();
+                final String[] batchResult = new String[]{""};
+
+                geminiService.executeCall(activeModelId, payload.toString(), false, new GeminiService.GeminiStreamListener() {
+                    @Override public void onChunk(String chunkText) {}
+                    @Override
+                    public void onComplete(String fullResponse) {
+                        batchResult[0] = fullResponse;
+                        synchronized (batchLock) { batchLock.notify(); }
+                    }
+                    @Override
+                    public void onCitationsReceived(List<GroundingSource> citations) {
+                        if (citations != null) allSources.addAll(citations);
+                    }
+                    @Override
+                    public void onError(String errorMessage) {
+                        batchResult[0] = "Batch error: " + errorMessage;
+                        synchronized (batchLock) { batchLock.notify(); }
+                    }
+                });
+
+                synchronized (batchLock) {
+                    try { batchLock.wait(120000); } catch (InterruptedException ignored) {}
+                }
+
+                intermediateFindings.add("--- BATCH " + currentBatchNum + " FINDINGS (URLs " + (start + 1) + " to " + end + ") ---\n" + batchResult[0]);
+            }
+
+            if (!isGenerating) return;
+
+            runOnUiThread(() -> tvEcgStatus.setText("Compiling Complete A-to-Z Repository Report..."));
+
+            StringBuilder synthesisPrompt = new StringBuilder();
+            synthesisPrompt.append("You have analyzed all ").append(allUrls.size()).append(" files across ").append(totalBatches).append(" batches.\n");
+            synthesisPrompt.append("User Request: ").append(userPrompt).append("\n\n");
+            synthesisPrompt.append("Here are the intermediate findings from all files:\n\n");
+            for (String finding : intermediateFindings) {
+                synthesisPrompt.append(finding).append("\n\n");
+            }
+            synthesisPrompt.append("\nNow, produce a single, deeply detailed, comprehensive A-to-Z repository analysis report covering:\n");
+            synthesisPrompt.append("1. Executive Summary & Purpose\n");
+            synthesisPrompt.append("2. Architecture & Major Components\n");
+            synthesisPrompt.append("3. Complete File-by-File Inventory with functions and logic\n");
+            synthesisPrompt.append("4. Data flows, models, and dependencies\n");
+            synthesisPrompt.append("5. Security, permissions, and technical recommendations.");
+
+            JSONObject finalPayload = new JSONObject();
+            try {
+                JSONArray contents = new JSONArray();
+                JSONObject userPart = new JSONObject();
+                userPart.put("role", "user");
+                JSONArray parts = new JSONArray();
+                JSONObject textPart = new JSONObject();
+                textPart.put("text", synthesisPrompt.toString());
+                parts.put(textPart);
+                userPart.put("parts", parts);
+                contents.put(userPart);
+                finalPayload.put("contents", contents);
+            } catch (Exception ignored) {}
+
+            geminiService.executeCall(activeModelId, finalPayload.toString(), true, new GeminiService.GeminiStreamListener() {
+                @Override
+                public void onChunk(String chunkText) {
+                    runOnUiThread(() -> {
+                        assistantMsg.setText(assistantMsg.getText() + chunkText);
+                        chatAdapter.notifyItemChanged(chatAdapter.getItemCount() - 1);
+                        rvChatTimeline.smoothScrollToPosition(chatAdapter.getItemCount() - 1);
+                    });
+                }
+
+                @Override
+                public void onComplete(String fullResponse) {
+                    runOnUiThread(() -> {
+                        assistantMsg.setText(fullResponse);
+                        assistantMsg.setStreaming(false);
+                        if (!allSources.isEmpty()) {
+                            assistantMsg.setGroundingSources(allSources);
+                        }
+                        chatAdapter.notifyItemChanged(chatAdapter.getItemCount() - 1);
+                        finishGeneration();
+                    });
+                }
+
+                @Override
+                public void onCitationsReceived(List<GroundingSource> citations) {
+                    if (citations != null) allSources.addAll(citations);
+                }
+
+                @Override
+                public void onError(String errorMessage) {
+                    runOnUiThread(() -> {
+                        assistantMsg.setText("Synthesis Error: " + errorMessage);
+                        assistantMsg.setStreaming(false);
+                        chatAdapter.notifyItemChanged(chatAdapter.getItemCount() - 1);
+                        finishGeneration();
+                    });
+                }
+            });
+        }).start();
     }
 
     private boolean isGeminiNativeModel(String modelId) {
@@ -1299,7 +1505,6 @@ public class MainActivity extends AppCompatActivity {
                 toolsArray.put(googleSearch);
             }
 
-            // Google Gemini Official URL Context Tool integration
             if (prefs.getBoolean(AppConstants.KEY_URL_CONTEXT_ENABLED, false)) {
                 JSONObject urlContextTool = new JSONObject();
                 urlContextTool.put("url_context", new JSONObject());
@@ -1353,6 +1558,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void stopCurrentGeneration() {
+        isGenerating = false;
         if (headlessAudioBridge != null) {
             headlessAudioBridge.stopPuterChat();
         }
@@ -1596,7 +1802,6 @@ public class MainActivity extends AppCompatActivity {
             String idLower = rawId.toLowerCase(Locale.US);
             String nameLower = name.toLowerCase(Locale.US);
 
-            // Broadened matching so all Live models are properly classified under Category: LIVE
             if (nameLower.contains("live preview") || idLower.contains("live-preview") || 
                 idLower.contains("live") || nameLower.contains("live") || 
                 idLower.contains("flash-exp") || nameLower.contains("flash exp") ||
@@ -1868,18 +2073,16 @@ public class MainActivity extends AppCompatActivity {
         activeProvider = "Gemini";
         prefs.edit().putString(AppConstants.KEY_ACTIVE_PROVIDER, activeProvider).apply();
 
-        // Preserve user's explicitly selected live model if already live-compatible
         String targetLiveModel = activeModelId;
         String lower = activeModelId.toLowerCase(Locale.US);
-        boolean isAlreadyLiveModel = lower.contains("live") || lower.contains("native-audio") || lower.contains("flash-exp");
+        boolean isAlreadyLiveModel = lower.contains("live") || lower.contains("native-audio") || lower.contains("flash-exp") || lower.contains("3.1");
 
         if (!isAlreadyLiveModel) {
-            // Find a live model from the loaded model inventory
             for (AIModelDefinition m : allModelsList) {
                 String mId = m.getId() != null ? m.getId() : "";
                 String dName = m.getDisplayName() != null ? m.getDisplayName() : "";
-                if (dName.toLowerCase(Locale.US).contains("live preview") || mId.toLowerCase(Locale.US).contains("live-preview") ||
-                    mId.toLowerCase(Locale.US).contains("native-audio") || dName.toLowerCase(Locale.US).contains("native audio")) {
+                if (dName.toLowerCase(Locale.US).contains("3.1") || dName.toLowerCase(Locale.US).contains("live preview") ||
+                    mId.toLowerCase(Locale.US).contains("live-preview") || mId.toLowerCase(Locale.US).contains("native-audio")) {
                     targetLiveModel = mId;
                     break;
                 }
