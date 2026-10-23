@@ -181,6 +181,7 @@ public class MainActivity extends AppCompatActivity {
     // State Variables
     private ChatSession currentSession;
     private ChatMessage currentActiveAssistantMsg;
+    private ChatMessage currentActiveLiveBotMsg;
     private String activeModelId = AppConstants.DEFAULT_MODEL;
     private String activeProvider = "Puter";
     private String previousProviderBeforeLive = null;
@@ -354,6 +355,11 @@ public class MainActivity extends AppCompatActivity {
             }
 
             @Override
+            public void onUserTranscriptReceived(String text) {
+                onLiveUserTranscriptReceived(text);
+            }
+
+            @Override
             public void onAudioChunkReceived(String base64Pcm) {}
 
             @Override
@@ -375,10 +381,6 @@ public class MainActivity extends AppCompatActivity {
         headlessAudioWebView.loadUrl("https://appassets.androidplatform.net/assets/headless_live_audio.html");
     }
 
-    /**
-     * Injects the active Puter authentication token directly into localStorage
-     * and into the in-memory puter SDK instance (puter.authToken and puter.auth.token).
-     */
     public void syncPuterTokenToHeadless() {
         syncPuterTokenToHeadless(false);
     }
@@ -389,7 +391,7 @@ public class MainActivity extends AppCompatActivity {
         if (token != null && !token.trim().isEmpty()) {
             String clean = token.trim();
             if (!force && clean.equals(lastInjectedPuterToken)) {
-                return; // Token already synchronized, abort loop completely
+                return;
             }
             lastInjectedPuterToken = clean;
 
@@ -470,11 +472,12 @@ public class MainActivity extends AppCompatActivity {
         });
     }
 
-    // --- PUBLIC METHODS CALLED BY WebAppInterface & BRIDGE FOR GEMINI LIVE ---
+    // --- GEMINI LIVE CHAT BUBBLE STREAMING & CONNECTION ---
 
     public void onLiveSessionConnected() {
         runOnUiThread(() -> {
             isLiveVoiceConnected = true;
+            currentActiveLiveBotMsg = null;
             if (tvLiveVoiceStatus != null) tvLiveVoiceStatus.setText(R.string.voice_status_listening);
             toggleStarAnimation(true);
             addSystemMessage("🟢 Connected to Gemini Live Model");
@@ -482,14 +485,77 @@ public class MainActivity extends AppCompatActivity {
         });
     }
 
+    /**
+     * Renders incoming transcribed text from the live voice model directly into a Bot chat bubble.
+     */
     public void onLiveTranscriptReceived(String text) {
+        if (text == null || text.trim().isEmpty()) return;
+        if (text.startsWith("User: ")) {
+            onLiveUserTranscriptReceived(text.substring(6));
+            return;
+        }
+        if (text.startsWith("Bot: ")) {
+            text = text.substring(5);
+        }
+
+        final String botContent = text;
         runOnUiThread(() -> {
-            if (tvLiveTranscriptTicker != null) tvLiveTranscriptTicker.setText(text);
+            if (tvLiveTranscriptTicker != null) tvLiveTranscriptTicker.setText(botContent);
+
+            if (currentActiveLiveBotMsg != null && currentActiveLiveBotMsg.isStreaming()) {
+                currentActiveLiveBotMsg.setText(currentActiveLiveBotMsg.getText() + " " + botContent);
+                chatAdapter.notifyItemChanged(chatAdapter.getItemCount() - 1);
+            } else {
+                currentActiveLiveBotMsg = new ChatMessage(
+                        "msg_live_bot_" + System.currentTimeMillis(),
+                        ChatMessage.ROLE_BOT,
+                        botContent,
+                        System.currentTimeMillis()
+                );
+                currentActiveLiveBotMsg.setModelUsed(activeModelId);
+                currentActiveLiveBotMsg.setStreaming(true);
+                chatAdapter.addMessage(currentActiveLiveBotMsg);
+                if (currentSession != null) {
+                    currentSession.addMessage(currentActiveLiveBotMsg);
+                    sessionManager.saveSession(currentSession);
+                }
+            }
+            rvChatTimeline.smoothScrollToPosition(Math.max(0, chatAdapter.getItemCount() - 1));
+        });
+    }
+
+    /**
+     * Renders the user's spoken words into a native User chat bubble.
+     */
+    public void onLiveUserTranscriptReceived(String userText) {
+        if (userText == null || userText.trim().isEmpty()) return;
+        runOnUiThread(() -> {
+            if (currentActiveLiveBotMsg != null) {
+                currentActiveLiveBotMsg.setStreaming(false);
+                currentActiveLiveBotMsg = null;
+            }
+
+            ChatMessage userMsg = new ChatMessage(
+                    "msg_live_user_" + System.currentTimeMillis(),
+                    ChatMessage.ROLE_USER,
+                    userText.trim(),
+                    System.currentTimeMillis()
+            );
+            chatAdapter.addMessage(userMsg);
+            if (currentSession != null) {
+                currentSession.addMessage(userMsg);
+                sessionManager.saveSession(currentSession);
+            }
+            rvChatTimeline.smoothScrollToPosition(Math.max(0, chatAdapter.getItemCount() - 1));
         });
     }
 
     public void onLiveSessionFinished() {
         runOnUiThread(() -> {
+            if (currentActiveLiveBotMsg != null) {
+                currentActiveLiveBotMsg.setStreaming(false);
+                currentActiveLiveBotMsg = null;
+            }
             if (isLiveVoiceConnected) {
                 isLiveVoiceConnected = false;
                 if (tvLiveVoiceStatus != null) tvLiveVoiceStatus.setText(R.string.voice_status_speaking);
@@ -508,6 +574,10 @@ public class MainActivity extends AppCompatActivity {
 
     public void onLiveError(String err) {
         runOnUiThread(() -> {
+            if (currentActiveLiveBotMsg != null) {
+                currentActiveLiveBotMsg.setStreaming(false);
+                currentActiveLiveBotMsg = null;
+            }
             if (isLiveVoiceConnected) {
                 isLiveVoiceConnected = false;
                 if (tvLiveVoiceStatus != null) tvLiveVoiceStatus.setText(err);
@@ -1075,7 +1145,8 @@ public class MainActivity extends AppCompatActivity {
         boolean urlContextEnabled = prefs.getBoolean(AppConstants.KEY_URL_CONTEXT_ENABLED, false);
         final String effectivePrompt = finalPrompt;
 
-        if (urlContextEnabled && prompt.matches(".*https?://\\S+.*")) {
+        // If not a Gemini model and URL context is enabled, use local manual fallback scraping
+        if (urlContextEnabled && !isGeminiNativeModel(activeModelId) && prompt.matches(".*https?://\\S+.*")) {
             new Thread(() -> {
                 String enriched = fetchUrlContextIfPresent(effectivePrompt);
                 runOnUiThread(() -> routeGeneration(enriched, attachments, assistantMsg));
@@ -1125,31 +1196,9 @@ public class MainActivity extends AppCompatActivity {
         return text;
     }
 
-    /**
-     * Executes Puter multi-model chat or image generation via the headless Puter SDK worker.
-     * Guarantees token injection directly before dispatching.
-     */
     private void dispatchPuterGeneration(String prompt, List<StagedFile> attachments, ChatMessage assistantMsg) {
         currentActiveAssistantMsg = assistantMsg;
-        
-        // Force sync token right now to ensure headless context has the token before dispatch
         syncPuterTokenToHeadless(true);
-
-        // Audit device network connection
-        boolean isConnected = false;
-        try {
-            ConnectivityManager cm = (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
-            if (cm != null) {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                    NetworkCapabilities caps = cm.getNetworkCapabilities(cm.getActiveNetwork());
-                    isConnected = (caps != null && (caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
-                            && caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)));
-                } else {
-                    android.net.NetworkInfo ni = cm.getActiveNetworkInfo();
-                    isConnected = (ni != null && ni.isConnected());
-                }
-            }
-        } catch (Exception ignored) {}
 
         JSONArray messagesArray = new JSONArray();
         try {
@@ -1243,14 +1292,24 @@ public class MainActivity extends AppCompatActivity {
                 payload.put("systemInstruction", sysObj);
             }
 
+            JSONArray toolsArray = new JSONArray();
             if (currentSession.getConfig().isWebGroundingEnabled()) {
-                JSONObject tools = new JSONObject();
                 JSONObject googleSearch = new JSONObject();
-                tools.put("googleSearch", googleSearch);
-                JSONArray toolsArray = new JSONArray();
-                toolsArray.put(tools);
+                googleSearch.put("googleSearch", new JSONObject());
+                toolsArray.put(googleSearch);
+            }
+
+            // Google Gemini Official URL Context Tool integration
+            if (prefs.getBoolean(AppConstants.KEY_URL_CONTEXT_ENABLED, false)) {
+                JSONObject urlContextTool = new JSONObject();
+                urlContextTool.put("url_context", new JSONObject());
+                toolsArray.put(urlContextTool);
+            }
+
+            if (toolsArray.length() > 0) {
                 payload.put("tools", toolsArray);
             }
+
         } catch (Exception ignored) {}
 
         geminiService.executeCall(activeModelId, payload.toString(), true, new GeminiService.GeminiStreamListener() {
@@ -1536,7 +1595,13 @@ public class MainActivity extends AppCompatActivity {
             String desc = obj.optString("description", "").toLowerCase(Locale.US);
             String idLower = rawId.toLowerCase(Locale.US);
             String nameLower = name.toLowerCase(Locale.US);
-            if (nameLower.contains("live preview") || idLower.contains("live-preview") || nameLower.contains("native audio") || idLower.contains("native-audio")) {
+
+            // Broadened matching so all Live models are properly classified under Category: LIVE
+            if (nameLower.contains("live preview") || idLower.contains("live-preview") || 
+                idLower.contains("live") || nameLower.contains("live") || 
+                idLower.contains("flash-exp") || nameLower.contains("flash exp") ||
+                nameLower.contains("native audio") || idLower.contains("native-audio") ||
+                idLower.contains("realtime")) {
                 cats.add("live");
                 cats.add("audio");
             } else if (idLower.contains("audio") || idLower.contains("tts") || idLower.contains("speech")) {
@@ -1803,21 +1868,24 @@ public class MainActivity extends AppCompatActivity {
         activeProvider = "Gemini";
         prefs.edit().putString(AppConstants.KEY_ACTIVE_PROVIDER, activeProvider).apply();
 
-        String targetLiveModel = "Gemini 3.1 Flash Live Preview";
-        if (activeModelId.toLowerCase(Locale.US).contains("native-audio") ||
-            activeModelId.equalsIgnoreCase("Gemini 2.5 Flash Native Audio Preview")) {
-            targetLiveModel = activeModelId;
-        } else {
+        // Preserve user's explicitly selected live model if already live-compatible
+        String targetLiveModel = activeModelId;
+        String lower = activeModelId.toLowerCase(Locale.US);
+        boolean isAlreadyLiveModel = lower.contains("live") || lower.contains("native-audio") || lower.contains("flash-exp");
+
+        if (!isAlreadyLiveModel) {
+            // Find a live model from the loaded model inventory
             for (AIModelDefinition m : allModelsList) {
-                String dName = m.getDisplayName() != null ? m.getDisplayName() : "";
                 String mId = m.getId() != null ? m.getId() : "";
-                if (dName.equalsIgnoreCase("Gemini 3.1 Flash Live Preview") ||
-                    mId.toLowerCase(Locale.US).contains("3.1-flash-live")) {
-                    targetLiveModel = m.getId();
+                String dName = m.getDisplayName() != null ? m.getDisplayName() : "";
+                if (dName.toLowerCase(Locale.US).contains("live preview") || mId.toLowerCase(Locale.US).contains("live-preview") ||
+                    mId.toLowerCase(Locale.US).contains("native-audio") || dName.toLowerCase(Locale.US).contains("native audio")) {
+                    targetLiveModel = mId;
                     break;
                 }
             }
         }
+
         activeModelId = targetLiveModel;
         selectedModelText.setText(activeModelId);
         if (currentSession != null) {
@@ -1825,7 +1893,7 @@ public class MainActivity extends AppCompatActivity {
             sessionManager.saveSession(currentSession);
         }
 
-        Toast.makeText(this, "Switched active provider model to Gemini Live Preview", Toast.LENGTH_SHORT).show();
+        Toast.makeText(this, "Starting Live Audio: " + activeModelId, Toast.LENGTH_SHORT).show();
 
         if (headlessAudioBridge != null) {
             headlessAudioBridge.startCommentarySession("auto", activeModelId);
@@ -2386,13 +2454,9 @@ public class MainActivity extends AppCompatActivity {
         popupWebView.loadUrl(sdkAuthUrl, headers);
     }
 
-    /**
-     * Inspects localStorage, Puter JS runtime, and WebKit cookies for session credentials.
-     */
     private void extractTokensFromWebView(WebView webView, boolean finalizeOnFound) {
         if (webView == null) return;
 
-        // 1. Check WebKit Cookies on puter.com
         try {
             CookieManager cm = CookieManager.getInstance();
             String cookies = cm.getCookie("https://puter.com");
@@ -2429,7 +2493,6 @@ public class MainActivity extends AppCompatActivity {
             }
         } catch (Exception ignored) {}
 
-        // 2. Query localStorage directly via JavaScript
         String jsQuery = "(function(){" +
                 "  var t = '';" +
                 "  try { t = localStorage.getItem('puter.auth.token') || localStorage.getItem('token') || ''; } catch(e){}" +
