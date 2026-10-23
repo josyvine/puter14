@@ -15,11 +15,12 @@ import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
-import java.io.Reader;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
@@ -38,7 +39,7 @@ import okhttp3.ResponseBody;
  * Native Network Service for Google Gemini APIs.
  * Pure Java implementation with direct Java callback listeners.
  * Handles background REST, streaming execution, active call cancellation,
- * URL context extraction/fetching, and live model discovery utilizing OkHttp.
+ * official Gemini URL context tool, and live model discovery utilizing OkHttp.
  */
 public class GeminiService {
 
@@ -92,14 +93,15 @@ public class GeminiService {
         executorService.execute(() -> {
             Call call = null;
             try {
-                // 1. Guard against non-Gemini router models accidentally routed to Google API
-                if (isNonGeminiModel(modelId)) {
+                // 1. Sanitize model name first before validating
+                String sanitizedModel = sanitizeModelId(modelId);
+
+                // 2. Guard against non-Gemini router models accidentally routed to Google API
+                if (isNonGeminiModel(sanitizedModel)) {
                     deliverError(listener, "Invalid model for Google Gemini API: " + modelId + 
                             ". This model belongs to Puter/OpenRouter. Please switch active provider to Puter.");
                     return;
                 }
-
-                String sanitizedModel = sanitizeModelId(modelId);
 
                 SharedPreferences prefs = context.getSharedPreferences(AppConstants.PREF_NAME, Context.MODE_PRIVATE);
                 String apiKey = prefs.getString(AppConstants.KEY_GEMINI_API_KEY, "");
@@ -172,12 +174,12 @@ public class GeminiService {
         String m = modelId.toLowerCase(Locale.US);
         return m.contains("openrouter") || m.contains("togetherai") || m.contains("puter") || 
                m.contains("claude") || m.contains("deepseek") || m.contains("gpt-") || 
-               m.contains("mistral") || m.contains("qwen") || m.contains(":") || m.contains("/");
+               m.contains("mistral") || m.contains("qwen") || m.contains(":");
     }
 
     private String sanitizeModelId(String rawModelId) {
         if (rawModelId == null || rawModelId.trim().isEmpty()) {
-            return "gemini-1.5-flash";
+            return "gemini-2.5-flash";
         }
         String cleaned = rawModelId.trim();
         if (cleaned.startsWith("models/")) {
@@ -209,6 +211,7 @@ public class GeminiService {
         String line;
         StringBuilder fullAccumulator = new StringBuilder();
         List<GroundingSource> allCitations = new ArrayList<>();
+        Set<String> seenCitationUris = new HashSet<>();
 
         try {
             while ((line = reader.readLine()) != null) {
@@ -220,7 +223,14 @@ public class GeminiService {
                         JSONObject chunkObj = new JSONObject(data);
                         String text = extractTextFromGeminiJson(chunkObj);
                         List<GroundingSource> citations = extractCitations(chunkObj);
-                        if (citations != null) allCitations.addAll(citations);
+                        if (citations != null) {
+                            for (GroundingSource src : citations) {
+                                if (src.getUrl() != null && !seenCitationUris.contains(src.getUrl())) {
+                                    seenCitationUris.add(src.getUrl());
+                                    allCitations.add(src);
+                                }
+                            }
+                        }
 
                         if (text != null && !text.isEmpty()) {
                             fullAccumulator.append(text);
@@ -286,9 +296,11 @@ public class GeminiService {
                                 JSONObject c = chunks.getJSONObject(i);
                                 if (c.has("web")) {
                                     JSONObject w = c.getJSONObject("web");
-                                    String uri = w.optString("uri", "");
+                                    String uri = w.optString("uri", w.optString("url", ""));
                                     String title = w.optString("title", uri);
-                                    list.add(new GroundingSource(uri, title, "", ""));
+                                    if (!uri.isEmpty()) {
+                                        list.add(new GroundingSource(uri, title, "", ""));
+                                    }
                                 }
                             }
                         }
@@ -299,17 +311,39 @@ public class GeminiService {
         return list;
     }
 
+    /**
+     * Cleans up the payload JSON.
+     * When the official Google Gemini "url_context" tool is declared in "tools",
+     * manual client scraping is bypassed so Google's backend handles retrieval natively.
+     */
     private String processUrlContextAndCleanPayload(String rawPayloadJson) {
         try {
             JSONObject root = new JSONObject(rawPayloadJson);
 
-            boolean isUrlContextEnabled = false;
+            // Check if official Gemini url_context tool is already embedded in tools array
+            boolean hasOfficialUrlContextTool = false;
+            if (root.has("tools")) {
+                JSONArray tools = root.getJSONArray("tools");
+                for (int i = 0; i < tools.length(); i++) {
+                    JSONObject tool = tools.getJSONObject(i);
+                    if (tool.has("url_context") || tool.has("urlContext")) {
+                        hasOfficialUrlContextTool = true;
+                        break;
+                    }
+                }
+            }
+
+            // Clean any legacy boolean flag
             if (root.has("urlContext")) {
-                isUrlContextEnabled = root.optBoolean("urlContext", false);
                 root.remove("urlContext");
             }
 
-            if (!isUrlContextEnabled || !root.has("contents")) {
+            // If official Gemini url_context tool is present, let Google process it directly
+            if (hasOfficialUrlContextTool) {
+                return root.toString();
+            }
+
+            if (!root.has("contents")) {
                 return root.toString();
             }
 
