@@ -2,6 +2,7 @@ package com.puter.unofficial;
 
 import android.content.Context;
 import android.content.SharedPreferences;
+import android.net.Uri;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.Log;
@@ -44,7 +45,7 @@ import okhttp3.ResponseBody;
 public class GeminiService {
 
     private static final String TAG = "GeminiService";
-    private static final Pattern URL_PATTERN = Pattern.compile("https?://[a-zA-Z0-9./_\\-~%#?=&]+");
+    private static final Pattern URL_PATTERN = Pattern.compile("https?://\\S+");
 
     public interface GeminiStreamListener {
         void onChunk(String chunkText);
@@ -283,11 +284,30 @@ public class GeminiService {
 
     private List<GroundingSource> extractCitations(JSONObject root) {
         List<GroundingSource> list = new ArrayList<>();
+        Set<String> seen = new HashSet<>();
         try {
             if (root.has("candidates")) {
                 JSONArray candidates = root.getJSONArray("candidates");
                 if (candidates.length() > 0) {
                     JSONObject cand = candidates.getJSONObject(0);
+
+                    // 1. Parse official Google URL Context metadata
+                    if (cand.has("urlContextMetadata")) {
+                        JSONObject ucm = cand.getJSONObject("urlContextMetadata");
+                        if (ucm.has("urlMetadata")) {
+                            JSONArray uList = ucm.getJSONArray("urlMetadata");
+                            for (int i = 0; i < uList.length(); i++) {
+                                JSONObject uObj = uList.getJSONObject(i);
+                                String retrievedUrl = uObj.optString("retrievedUrl", uObj.optString("url", ""));
+                                if (!retrievedUrl.isEmpty() && !seen.contains(retrievedUrl)) {
+                                    seen.add(retrievedUrl);
+                                    list.add(new GroundingSource(retrievedUrl, getDomainOrTitle(retrievedUrl), "", ""));
+                                }
+                            }
+                        }
+                    }
+
+                    // 2. Parse groundingChunks from web search grounding
                     if (cand.has("groundingMetadata")) {
                         JSONObject gm = cand.getJSONObject("groundingMetadata");
                         if (gm.has("groundingChunks")) {
@@ -298,7 +318,8 @@ public class GeminiService {
                                     JSONObject w = c.getJSONObject("web");
                                     String uri = w.optString("uri", w.optString("url", ""));
                                     String title = w.optString("title", uri);
-                                    if (!uri.isEmpty()) {
+                                    if (!uri.isEmpty() && !seen.contains(uri)) {
+                                        seen.add(uri);
                                         list.add(new GroundingSource(uri, title, "", ""));
                                     }
                                 }
@@ -311,16 +332,51 @@ public class GeminiService {
         return list;
     }
 
+    private String getDomainOrTitle(String url) {
+        try {
+            Uri uri = Uri.parse(url);
+            String host = uri.getHost();
+            if (host != null && !host.isEmpty()) {
+                return host;
+            }
+        } catch (Exception ignored) {}
+        return url;
+    }
+
+    /**
+     * Sanitizes prompt URLs by stripping list numbering ("1. ", "2) ")
+     * and percent-encoding whitespace (" " -> "%20").
+     */
+    private String cleanAndEncodePromptUrls(String text) {
+        if (text == null || text.trim().isEmpty()) return text;
+        StringBuilder sb = new StringBuilder();
+        String[] lines = text.split("\\r?\\n");
+        for (int i = 0; i < lines.length; i++) {
+            String line = lines[i];
+            String stripped = line.replaceFirst("^\\s*\\d+[\\.\\)]\\s*", "");
+            if (stripped.contains("http://") || stripped.contains("https://")) {
+                int start = stripped.indexOf("http");
+                String prefix = stripped.substring(0, start);
+                String urlPart = stripped.substring(start).trim();
+                String encodedUrl = urlPart.replace(" ", "%20");
+                sb.append(prefix).append(encodedUrl);
+            } else {
+                sb.append(line);
+            }
+            if (i < lines.length - 1) sb.append("\n");
+        }
+        return sb.toString();
+    }
+
     /**
      * Cleans up the payload JSON.
-     * When the official Google Gemini "url_context" tool is declared in "tools",
-     * manual client scraping is bypassed so Google's backend handles retrieval natively.
+     * Sanitizes URL paths and bypasses manual client scraping when official "url_context" is used.
      */
     private String processUrlContextAndCleanPayload(String rawPayloadJson) {
         try {
             JSONObject root = new JSONObject(rawPayloadJson);
 
-            // Check if official Gemini url_context tool is already embedded in tools array
+            // Check if official Gemini url_context tool is present in tools array
             boolean hasOfficialUrlContextTool = false;
             if (root.has("tools")) {
                 JSONArray tools = root.getJSONArray("tools");
@@ -333,9 +389,26 @@ public class GeminiService {
                 }
             }
 
-            // Clean any legacy boolean flag
             if (root.has("urlContext")) {
                 root.remove("urlContext");
+            }
+
+            // Clean prompt URLs (strip numbers and percent-encode spaces)
+            if (root.has("contents")) {
+                JSONArray contents = root.getJSONArray("contents");
+                for (int i = 0; i < contents.length(); i++) {
+                    JSONObject turn = contents.getJSONObject(i);
+                    if (turn.has("parts")) {
+                        JSONArray parts = turn.getJSONArray("parts");
+                        for (int j = 0; j < parts.length(); j++) {
+                            JSONObject part = parts.getJSONObject(j);
+                            if (part.has("text")) {
+                                String cleanText = cleanAndEncodePromptUrls(part.getString("text"));
+                                part.put("text", cleanText);
+                            }
+                        }
+                    }
+                }
             }
 
             // If official Gemini url_context tool is present, let Google process it directly
