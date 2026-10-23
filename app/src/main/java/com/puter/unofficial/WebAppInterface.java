@@ -71,7 +71,7 @@ public class WebAppInterface {
                 return m;
             }
         }
-        return "gemini-3.1-flash-live-preview";
+        return "gemini-2.0-flash-exp";
     }
 
     @JavascriptInterface
@@ -195,9 +195,6 @@ public class WebAppInterface {
         if (audioBridge != null) {
             audioBridge.dispatchConnected();
         }
-        if (mainActivity != null) {
-            mainActivity.runOnUiThread(() -> mainActivity.onLiveSessionConnected());
-        }
     }
 
     @JavascriptInterface
@@ -209,21 +206,17 @@ public class WebAppInterface {
 
     @JavascriptInterface
     public void onLiveCommentaryText(String text) {
+        // Dispatches through audioBridge listener once, preventing duplicate bubble rendering
         if (audioBridge != null) {
             audioBridge.dispatchTranscript(text);
-        }
-        if (mainActivity != null) {
-            mainActivity.runOnUiThread(() -> mainActivity.onLiveTranscriptReceived(text));
         }
     }
 
     @JavascriptInterface
     public void onLiveUserTranscript(String text) {
+        // Dispatches through audioBridge listener once, preventing duplicate bubble rendering
         if (audioBridge != null) {
             audioBridge.dispatchUserTranscript(text);
-        }
-        if (mainActivity != null) {
-            mainActivity.runOnUiThread(() -> mainActivity.onLiveUserTranscriptReceived(text));
         }
     }
 
@@ -233,18 +226,12 @@ public class WebAppInterface {
         if (audioBridge != null) {
             audioBridge.dispatchFinished();
         }
-        if (mainActivity != null) {
-            mainActivity.runOnUiThread(() -> mainActivity.onLiveSessionFinished());
-        }
     }
 
     @JavascriptInterface
     public void onLiveError(String err) {
         if (audioBridge != null) {
             audioBridge.dispatchError(err);
-        }
-        if (mainActivity != null) {
-            mainActivity.runOnUiThread(() -> mainActivity.onLiveError(err));
         }
     }
 
@@ -262,6 +249,7 @@ public class WebAppInterface {
 
     @JavascriptInterface
     public void showToast(String msg) {
+        if (msg == null || msg.toLowerCase().contains("speech engine")) return;
         mainHandler.post(() -> Toast.makeText(context, msg, Toast.LENGTH_SHORT).show());
     }
 
