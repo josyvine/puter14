@@ -1122,13 +1122,10 @@ public class MainActivity extends AppCompatActivity {
         rvStagedAttachments.setVisibility(View.GONE);
         updateSendButtonState();
 
-        // Check if any attached .txt file contains URLs to extract
+        // Check if any attached non-image file (text/json/csv/data) contains URLs to extract
         List<String> collectedUrls = new ArrayList<>(extractAndSanitizeUrls(prompt));
         for (StagedFile file : attachments) {
-            String fn = file.getFileName();
-            boolean isTextFile = (file.getMimeType() != null && file.getMimeType().contains("text"))
-                    || (fn != null && (fn.endsWith(".txt") || fn.endsWith(".json") || fn.endsWith(".csv") || fn.endsWith(".md")));
-            if (isTextFile) {
+            if (file.getMimeType() != null && !file.getMimeType().startsWith("image/")) {
                 String dataUri = file.getBase64DataUri();
                 if (dataUri != null && dataUri.contains("base64,")) {
                     try {
