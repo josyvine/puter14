@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
     android:id="@+id/llCodeBlockRoot"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
@@ -8,7 +9,7 @@
     android:background="@drawable/bg_code_block"
     android:orientation="vertical">
 
-    <!-- Code Header Bar (#2d2d2d) -->
+    <!-- Sticky Code Header Bar (#2d2d2d) - Always pinned at top -->
     <LinearLayout
         android:id="@+id/llCodeHeader"
         android:layout_width="match_parent"
@@ -71,22 +72,44 @@
             android:textSize="12sp" />
     </LinearLayout>
 
-    <!-- Monospace Code Area (Horizontal Scrolling) -->
-    <HorizontalScrollView
-        android:id="@+id/hsvCodeScroll"
+    <!-- Constrained Scroll Container: Pins Header to the top while code scrolls -->
+    <androidx.constraintlayout.widget.ConstraintLayout
         android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:padding="10dp"
-        android:scrollbars="horizontal">
+        android:layout_height="wrap_content">
 
-        <TextView
-            android:id="@+id/tvCodeContent"
-            android:layout_width="wrap_content"
+        <androidx.core.widget.NestedScrollView
+            android:id="@+id/nsvCodeVerticalScroll"
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:fontFamily="monospace"
-            android:textColor="@color/code_text"
-            android:textSize="13sp"
-            android:textIsSelectable="true" />
-    </HorizontalScrollView>
+            android:fillViewport="true"
+            android:scrollbars="vertical"
+            app:layout_constrainedHeight="true"
+            app:layout_constraintHeight_max="380dp"
+            app:layout_constraintTop_toTopOf="parent"
+            app:layout_constraintBottom_toBottomOf="parent"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintEnd_toEndOf="parent">
+
+            <!-- Monospace Code Area (Horizontal Scrolling) -->
+            <HorizontalScrollView
+                android:id="@+id/hsvCodeScroll"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:padding="10dp"
+                android:scrollbars="horizontal">
+
+                <TextView
+                    android:id="@+id/tvCodeContent"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:fontFamily="monospace"
+                    android:textColor="@color/code_text"
+                    android:textSize="13sp"
+                    android:textIsSelectable="true" />
+            </HorizontalScrollView>
+
+        </androidx.core.widget.NestedScrollView>
+
+    </androidx.constraintlayout.widget.ConstraintLayout>
 
 </LinearLayout>
