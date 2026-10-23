@@ -1125,7 +1125,10 @@ public class MainActivity extends AppCompatActivity {
         // Check if any attached non-image file (text/json/csv/data) contains URLs to extract
         List<String> collectedUrls = new ArrayList<>(extractAndSanitizeUrls(prompt));
         for (StagedFile file : attachments) {
-            if (file.getMimeType() != null && !file.getMimeType().startsWith("image/")) {
+            String fn = FileUtils.getFileName(this, file.getUri());
+            boolean isTextFile = (file.getMimeType() != null && file.getMimeType().contains("text"))
+                    || (fn != null && (fn.endsWith(".txt") || fn.endsWith(".json") || fn.endsWith(".csv") || fn.endsWith(".md")));
+            if (isTextFile) {
                 String dataUri = file.getBase64DataUri();
                 if (dataUri != null && dataUri.contains("base64,")) {
                     try {
@@ -1200,17 +1203,19 @@ public class MainActivity extends AppCompatActivity {
         } catch (Exception ignored) {}
 
         boolean urlContextEnabled = prefs.getBoolean(AppConstants.KEY_URL_CONTEXT_ENABLED, false);
+        
+        final String threadSafePrompt = finalPrompt;
 
         // Check if batching (> 20 URLs) is required for Gemini
         if (urlContextEnabled && isGeminiNativeModel(activeModelId) && collectedUrls.size() > 20) {
-            executeBatchedUrlContextAnalysis(collectedUrls, finalPrompt, assistantMsg);
+            executeBatchedUrlContextAnalysis(collectedUrls, threadSafePrompt, assistantMsg);
         } else if (urlContextEnabled && !isGeminiNativeModel(activeModelId) && !collectedUrls.isEmpty()) {
             new Thread(() -> {
-                String enriched = fetchUrlContextIfPresent(finalPrompt);
+                String enriched = fetchUrlContextIfPresent(threadSafePrompt);
                 runOnUiThread(() -> routeGeneration(enriched, attachments, assistantMsg));
             }).start();
         } else {
-            routeGeneration(finalPrompt, attachments, assistantMsg);
+            routeGeneration(threadSafePrompt, attachments, assistantMsg);
         }
     }
 
