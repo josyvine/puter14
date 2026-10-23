@@ -16,16 +16,13 @@ import android.util.Log;
 import android.webkit.JavascriptInterface;
 import android.widget.Toast;
 
-import com.puter.unofficial.logging.LiveLogManager;
-import com.puter.unofficial.logging.LogEntry;
-
 import java.io.OutputStream;
 
 /**
  * JavaScript interface bridge bound to headless_live_audio.html.
  * Handles Gemini Live Bidi WebSockets, Puter SDK authentication synchronization,
  * live audio streams, transcripts, vision tool events, official Puter.js
- * client-side chat streaming, model listing, and deep telemetry logging.
+ * client-side chat streaming, model listing, and utility actions.
  */
 public class WebAppInterface {
 
@@ -35,13 +32,11 @@ public class WebAppInterface {
     private final Handler mainHandler;
     private HeadlessAudioBridge audioBridge;
     private MainActivity mainActivity;
-    private final LiveLogManager logger;
 
     public WebAppInterface(Context context) {
         this.context = context;
         this.prefs = context.getSharedPreferences(AppConstants.PREF_NAME, Context.MODE_PRIVATE);
         this.mainHandler = new Handler(Looper.getMainLooper());
-        this.logger = LiveLogManager.getInstance(context);
     }
 
     public void setAudioBridge(HeadlessAudioBridge bridge) {
@@ -52,21 +47,16 @@ public class WebAppInterface {
         this.mainActivity = activity;
     }
 
-    // --- SYSTEM LOG CONSOLE TELEMETRY BRIDGE ---
+    // --- SYSTEM LOG CONSOLE TELEMETRY BRIDGE (SAFE NO-OP / STANDARD LOG) ---
 
     @JavascriptInterface
     public void logTechnicalEvent(String levelStr, String tag, String title, String details) {
-        LogEntry.Level level = LogEntry.Level.INFO;
-        try {
-            if (levelStr != null) {
-                level = LogEntry.Level.valueOf(levelStr.toUpperCase());
-            }
-        } catch (Exception ignored) {}
-
-        logger.log(level, tag != null ? tag : "JS_BRIDGE", title, details);
+        String logTag = (tag != null && !tag.isEmpty()) ? tag : TAG;
+        String logMsg = (title != null ? title + ": " : "") + (details != null ? details : "");
+        Log.d(logTag, logMsg);
     }
 
-    // --- EXISTING CONFIGURATION METHODS ---
+    // --- CONFIGURATION METHODS ---
 
     @JavascriptInterface
     public String getGeminiApiKey() {
@@ -107,7 +97,7 @@ public class WebAppInterface {
 
     @JavascriptInterface
     public void onAuthStatusChanged(boolean isSignedIn) {
-        logger.info("PUTER_AUTH", "Auth Status Changed", "isSignedIn: " + isSignedIn);
+        Log.d(TAG, "Auth Status Changed - isSignedIn: " + isSignedIn);
         AuthManager.getInstance(context).setLoggedIn(isSignedIn);
         if (mainActivity != null) {
             mainActivity.runOnUiThread(() -> mainActivity.reloadWebView());
@@ -133,7 +123,7 @@ public class WebAppInterface {
 
     @JavascriptInterface
     public void signOut() {
-        logger.info("PUTER_AUTH", "Sign Out Triggered", "Clearing native session.");
+        Log.d(TAG, "Sign Out Triggered. Clearing native session.");
         AuthManager.getInstance(context).logout();
         if (mainActivity != null) {
             mainActivity.runOnUiThread(() -> mainActivity.reloadWebView());
@@ -196,7 +186,7 @@ public class WebAppInterface {
 
     @JavascriptInterface
     public void onLiveSessionConnected() {
-        logger.ok("GEMINI_LIVE", "Session Connected", "WebSocket Bidi link successfully established.");
+        Log.d(TAG, "Live Session Connected - WebSocket Bidi link established.");
         if (audioBridge != null) {
             audioBridge.dispatchConnected();
         }
@@ -224,7 +214,7 @@ public class WebAppInterface {
 
     @JavascriptInterface
     public void onLiveCommentaryFinished() {
-        logger.info("GEMINI_LIVE", "Turn Completed", "Live commentary response finished.");
+        Log.d(TAG, "Live Commentary Finished.");
         if (audioBridge != null) {
             audioBridge.dispatchFinished();
         }
@@ -252,7 +242,7 @@ public class WebAppInterface {
 
     @JavascriptInterface
     public void logDiagnostic(String msg, String tag) {
-        logger.info(tag != null ? tag : "DIAGNOSTIC", msg, "");
+        Log.d(tag != null ? tag : "DIAGNOSTIC", msg != null ? msg : "");
     }
 
     @JavascriptInterface
@@ -282,11 +272,11 @@ public class WebAppInterface {
                         bitmap.compress(Bitmap.CompressFormat.JPEG, 95, out);
                     }
                     mainHandler.post(() -> Toast.makeText(context, "Image saved to Gallery", Toast.LENGTH_SHORT).show());
-                    logger.ok("IMAGE_EXPORT", "Saved Successfully", "Path: " + uri.toString());
+                    Log.d(TAG, "Image saved successfully: " + uri);
                 }
             } catch (Exception e) {
                 mainHandler.post(() -> Toast.makeText(context, "Save failed: " + e.getMessage(), Toast.LENGTH_SHORT).show());
-                logger.error("IMAGE_EXPORT", "Save Failed", e.getMessage());
+                Log.e(TAG, "Image save failed: " + e.getMessage());
             }
         }).start();
     }
