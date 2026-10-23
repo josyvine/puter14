@@ -1125,7 +1125,10 @@ public class MainActivity extends AppCompatActivity {
         // Check if any attached .txt file contains URLs to extract
         List<String> collectedUrls = new ArrayList<>(extractAndSanitizeUrls(prompt));
         for (StagedFile file : attachments) {
-            if (file.getMimeType() != null && (file.getMimeType().contains("text") || file.getName().endsWith(".txt") || file.getName().endsWith(".json"))) {
+            String fn = file.getFileName();
+            boolean isTextFile = (file.getMimeType() != null && file.getMimeType().contains("text"))
+                    || (fn != null && (fn.endsWith(".txt") || fn.endsWith(".json") || fn.endsWith(".csv") || fn.endsWith(".md")));
+            if (isTextFile) {
                 String dataUri = file.getBase64DataUri();
                 if (dataUri != null && dataUri.contains("base64,")) {
                     try {
@@ -2902,4 +2905,3 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 }
-
