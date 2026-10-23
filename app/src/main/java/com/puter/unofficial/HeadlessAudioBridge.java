@@ -12,8 +12,6 @@ import android.webkit.WebChromeClient;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 
-import com.puter.unofficial.logging.LiveLogManager;
-
 import org.json.JSONObject;
 
 /**
@@ -170,7 +168,6 @@ public class HeadlessAudioBridge {
     public void fetchPuterLiveModels() {
         mainHandler.post(() -> {
             Log.d(TAG, "Requesting Puter live models from headless worker");
-            LiveLogManager.getInstance().process("PUTER_BRIDGE", "Fetching Live Models", "Invoking window.fetchPuterLiveModels()");
             webView.evaluateJavascript("if (typeof window.fetchPuterLiveModels === 'function') { window.fetchPuterLiveModels(); }", null);
         });
     }
@@ -182,9 +179,6 @@ public class HeadlessAudioBridge {
             String modelEscaped = JSONObject.quote(modelId != null ? modelId : "gpt-4o-mini");
             String sysEscaped = systemMessage != null ? JSONObject.quote(systemMessage) : "\"\"";
             String aspectEscaped = aspectRatio != null ? JSONObject.quote(aspectRatio) : "\"\"";
-
-            LiveLogManager.getInstance().process("PUTER_BRIDGE", "Dispatched to JS Engine",
-                    "Model: " + modelId + " | Payload chars: " + safeMessagesJson.length());
 
             // Safely parse JSON on JavaScript side to avoid syntax errors with newlines or quotes
             String js = String.format(
@@ -204,13 +198,9 @@ public class HeadlessAudioBridge {
                 @Override
                 public void onReceiveValue(String value) {
                     if (value == null || value.equals("null") || "\"MISSING_FUNCTION\"".equals(value)) {
-                        LiveLogManager.getInstance().error("PUTER_BRIDGE", "JS Function Missing", "window.sendPuterChat is not ready yet in headless WebView.");
                         dispatchPuterError("Headless chat worker is still loading. Please try again in a moment.");
                     } else if (value.contains("ERROR:")) {
-                        LiveLogManager.getInstance().error("PUTER_BRIDGE", "JS Evaluation Crash", value);
                         dispatchPuterError("Chat dispatch error: " + value);
-                    } else {
-                        LiveLogManager.getInstance().ok("PUTER_BRIDGE", "JS Confirmed", "Chat execution confirmed by browser engine");
                     }
                 }
             });
@@ -219,7 +209,6 @@ public class HeadlessAudioBridge {
 
     public void stopPuterChat() {
         mainHandler.post(() -> {
-            LiveLogManager.getInstance().info("PUTER_BRIDGE", "Stop Requested", "Invoking window.stopPuterChat()");
             webView.evaluateJavascript("if (typeof window.stopPuterChat === 'function') { window.stopPuterChat(); }", null);
         });
     }
@@ -234,29 +223,24 @@ public class HeadlessAudioBridge {
 
     public void dispatchPuterComplete(String fullResponse) {
         mainHandler.post(() -> {
-            LiveLogManager.getInstance().ok("PUTER_BRIDGE", "Stream Completed",
-                    "Total response: " + (fullResponse != null ? fullResponse.length() : 0) + " chars");
             if (puterListener != null) puterListener.onPuterStreamComplete(fullResponse);
         });
     }
 
     public void dispatchPuterImage(String imageUrl) {
         mainHandler.post(() -> {
-            LiveLogManager.getInstance().ok("PUTER_BRIDGE", "Image Received", "URL: " + imageUrl);
             if (puterListener != null) puterListener.onPuterImageReceived(imageUrl);
         });
     }
 
     public void dispatchPuterModels(String rawJson) {
         mainHandler.post(() -> {
-            LiveLogManager.getInstance().ok("PUTER_BRIDGE", "Models Fetched", "JSON payload received");
             if (puterListener != null) puterListener.onPuterModelsLoaded(rawJson);
         });
     }
 
     public void dispatchPuterError(String errorMessage) {
         mainHandler.post(() -> {
-            LiveLogManager.getInstance().error("PUTER_BRIDGE", "Error from Engine", errorMessage != null ? errorMessage : "Unknown error");
             if (puterListener != null) puterListener.onPuterError(errorMessage);
         });
     }
