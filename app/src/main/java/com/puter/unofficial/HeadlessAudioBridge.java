@@ -26,6 +26,7 @@ public class HeadlessAudioBridge {
     public interface LiveAudioEventListener {
         void onSessionConnected();
         void onTranscriptReceived(String text);
+        default void onUserTranscriptReceived(String text) {}
         void onAudioChunkReceived(String base64Pcm);
         void onCommentaryFinished();
         default void onSessionDisconnected() {}
@@ -257,6 +258,12 @@ public class HeadlessAudioBridge {
     public void dispatchTranscript(String text) {
         mainHandler.post(() -> {
             if (listener != null) listener.onTranscriptReceived(text);
+        });
+    }
+
+    public void dispatchUserTranscript(String text) {
+        mainHandler.post(() -> {
+            if (listener != null) listener.onUserTranscriptReceived(text);
         });
     }
 
