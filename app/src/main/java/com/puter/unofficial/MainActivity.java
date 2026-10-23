@@ -68,14 +68,10 @@ import androidx.core.content.ContextCompat;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
-import com.google.android.material.bottomsheet.BottomSheetBehavior;
 import com.google.android.material.bottomsheet.BottomSheetDialog;
 import com.puter.unofficial.adapters.ChatAdapter;
-import com.puter.unofficial.adapters.LogConsoleAdapter;
 import com.puter.unofficial.adapters.ModelAccordionAdapter;
 import com.puter.unofficial.adapters.StagedAttachmentsAdapter;
-import com.puter.unofficial.logging.LiveLogManager;
-import com.puter.unofficial.logging.LogEntry;
 import com.puter.unofficial.models.AIModelDefinition;
 import com.puter.unofficial.models.ChatMessage;
 import com.puter.unofficial.models.ChatSession;
@@ -97,9 +93,8 @@ import java.util.Map;
 
 /**
  * 100% Pure Native Android Java Activity for Puter Unofficial.
- * Includes floating draggable system log console for deep telemetry interception.
  */
-public class MainActivity extends AppCompatActivity implements LiveLogManager.LogEventListener {
+public class MainActivity extends AppCompatActivity {
 
     private static final String TAG = "MainActivity";
 
@@ -163,12 +158,6 @@ public class MainActivity extends AppCompatActivity implements LiveLogManager.Lo
     private TextView ctxToggleProvider;
     private TextView ctxEndSession;
     private ChatMessage contextTargetMessage;
-
-    // Floating Diagnostic Log Console
-    private View floatingLogView;
-    private TextView tvFloatingLogBadge;
-    private float dX, dY;
-    private float initialTouchX, initialTouchY;
 
     // Headless WebView & Live Voice Overlay HUD
     private WebView headlessAudioWebView;
@@ -237,9 +226,6 @@ public class MainActivity extends AppCompatActivity implements LiveLogManager.Lo
         setupOutsideTouchDismissal();
         loadInitialSession();
 
-        attachFloatingLogBadge();
-        LiveLogManager.getInstance(this).addListener(this);
-
         checkAndRequestPermissions();
     }
 
@@ -307,175 +293,6 @@ public class MainActivity extends AppCompatActivity implements LiveLogManager.Lo
         setupAspectRatioSpinner();
     }
 
-    // --- FLOATING DIAGNOSTIC LOG CONSOLE SYSTEM ---
-
-    @SuppressLint("ClickableViewAccessibility")
-    private void attachFloatingLogBadge() {
-        if (chatRootLayout == null) return;
-
-        floatingLogView = LayoutInflater.from(this).inflate(R.layout.view_floating_log_badge, chatRootLayout, false);
-        tvFloatingLogBadge = floatingLogView.findViewById(R.id.tvFloatingLogBadge);
-
-        CoordinatorLayout.LayoutParams lp = new CoordinatorLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        
-        DisplayMetrics dm = getResources().getDisplayMetrics();
-        int marginX = (int) (16 * dm.density);
-        int marginY = (int) (80 * dm.density);
-
-        lp.leftMargin = dm.widthPixels - marginX - (int)(68 * dm.density);
-        lp.topMargin = dm.heightPixels - marginY - (int)(68 * dm.density);
-        chatRootLayout.addView(floatingLogView, lp);
-
-        CardView cvBtn = floatingLogView.findViewById(R.id.cvFloatingLogBtn);
-        cvBtn.setOnTouchListener((v, event) -> {
-            switch (event.getActionMasked()) {
-                case MotionEvent.ACTION_DOWN:
-                    dX = floatingLogView.getX() - event.getRawX();
-                    dY = floatingLogView.getY() - event.getRawY();
-                    initialTouchX = event.getRawX();
-                    initialTouchY = event.getRawY();
-                    v.animate().scaleX(0.9f).scaleY(0.9f).setDuration(100).start();
-                    return true;
-
-                case MotionEvent.ACTION_MOVE:
-                    float newX = event.getRawX() + dX;
-                    float newY = event.getRawY() + dY;
-                    floatingLogView.setX(newX);
-                    floatingLogView.setY(newY);
-                    return true;
-
-                case MotionEvent.ACTION_UP:
-                    v.animate().scaleX(1f).scaleY(1f).setDuration(100).start();
-                    float deltaX = Math.abs(event.getRawX() - initialTouchX);
-                    float deltaY = Math.abs(event.getRawY() - initialTouchY);
-                    if (deltaX < 10 && deltaY < 10) {
-                        openSystemLogConsole();
-                    }
-                    return true;
-            }
-            return false;
-        });
-
-        LiveLogManager logger = LiveLogManager.getInstance(this);
-        onNewLogEntry(null, logger.getTotalCount(), logger.getErrorCount());
-    }
-
-    @Override
-    public void onNewLogEntry(LogEntry entry, int totalCount, int errorCount) {
-        if (tvFloatingLogBadge != null) {
-            tvFloatingLogBadge.setVisibility(totalCount > 0 ? View.VISIBLE : View.GONE);
-            tvFloatingLogBadge.setText(String.valueOf(totalCount));
-            if (errorCount > 0) {
-                tvFloatingLogBadge.setBackgroundTintList(android.content.res.ColorStateList.valueOf(Color.parseColor("#D50000")));
-            } else {
-                tvFloatingLogBadge.setBackgroundTintList(android.content.res.ColorStateList.valueOf(Color.parseColor("#7C4DFF")));
-            }
-        }
-    }
-
-    @Override
-    public void onLogsCleared() {
-        if (tvFloatingLogBadge != null) {
-            tvFloatingLogBadge.setVisibility(View.GONE);
-        }
-    }
-
-    private void openSystemLogConsole() {
-        BottomSheetDialog dialog = new BottomSheetDialog(this, R.style.BottomSheetDialogTheme);
-        dialog.getBehavior().setState(BottomSheetBehavior.STATE_EXPANDED);
-        dialog.getBehavior().setSkipCollapsed(true);
-        
-        View sheet = LayoutInflater.from(this).inflate(R.layout.dialog_system_log_console, null);
-        
-        ImageView btnMinimize = sheet.findViewById(R.id.btnMinimizeConsole);
-        EditText etSearch = sheet.findViewById(R.id.etLogSearch);
-        ImageView btnClearSearch = sheet.findViewById(R.id.btnClearSearch);
-        RecyclerView rvConsole = sheet.findViewById(R.id.rvLogConsole);
-        TextView tvSummary = sheet.findViewById(R.id.tvLogCountSummary);
-        TextView btnClearAll = sheet.findViewById(R.id.btnClearAllLogs);
-        LinearLayout llEmpty = sheet.findViewById(R.id.llEmptyLogsState);
-
-        TextView chipAll = sheet.findViewById(R.id.chipFilterAll);
-        TextView chipErrors = sheet.findViewById(R.id.chipFilterErrors);
-        TextView chipCrashes = sheet.findViewById(R.id.chipFilterCrashes);
-        TextView chipProcess = sheet.findViewById(R.id.chipFilterProcess);
-        TextView chipPuter = sheet.findViewById(R.id.chipFilterPuter);
-        TextView chipGemini = sheet.findViewById(R.id.chipFilterGemini);
-        TextView chipAuth = sheet.findViewById(R.id.chipFilterAuth);
-
-        TextView[] allChips = {chipAll, chipErrors, chipCrashes, chipProcess, chipPuter, chipGemini, chipAuth};
-
-        LogConsoleAdapter consoleAdapter = new LogConsoleAdapter();
-        rvConsole.setLayoutManager(new LinearLayoutManager(this));
-        rvConsole.setAdapter(consoleAdapter);
-
-        Runnable refreshUI = () -> {
-            int displayed = consoleAdapter.getItemCount();
-            int total = consoleAdapter.getMasterCount();
-            tvSummary.setText("Showing " + displayed + " of " + total + " total logs");
-            llEmpty.setVisibility(displayed == 0 ? View.VISIBLE : View.GONE);
-        };
-
-        LiveLogManager logger = LiveLogManager.getInstance(this);
-        consoleAdapter.setLogs(logger.getAllLogs());
-        refreshUI.run();
-
-        LiveLogManager.LogEventListener dialogListener = new LiveLogManager.LogEventListener() {
-            @Override
-            public void onNewLogEntry(LogEntry entry, int totalCount, int errorCount) {
-                runOnUiThread(() -> {
-                    consoleAdapter.addEntry(entry);
-                    refreshUI.run();
-                });
-            }
-            @Override
-            public void onLogsCleared() {
-                runOnUiThread(() -> {
-                    consoleAdapter.clearLogs();
-                    refreshUI.run();
-                });
-            }
-        };
-        logger.addListener(dialogListener);
-        dialog.setOnDismissListener(d -> logger.removeListener(dialogListener));
-
-        btnMinimize.setOnClickListener(v -> dialog.dismiss());
-        btnClearAll.setOnClickListener(v -> logger.clearLogs());
-
-        etSearch.addTextChangedListener(new TextWatcher() {
-            @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
-            @Override public void onTextChanged(CharSequence s, int start, int before, int count) {
-                btnClearSearch.setVisibility(s.length() > 0 ? View.VISIBLE : View.GONE);
-                consoleAdapter.setFilterQuery(s.toString());
-                refreshUI.run();
-            }
-            @Override public void afterTextChanged(Editable s) {}
-        });
-
-        btnClearSearch.setOnClickListener(v -> etSearch.setText(""));
-
-        View.OnClickListener chipClickListener = v -> {
-            for (TextView chip : allChips) {
-                chip.setBackgroundTintList(android.content.res.ColorStateList.valueOf(Color.parseColor("#181C2B")));
-                chip.setTextColor(Color.parseColor("#8C95AB"));
-            }
-            v.setBackgroundTintList(android.content.res.ColorStateList.valueOf(Color.parseColor("#7C4DFF")));
-            ((TextView)v).setTextColor(Color.WHITE);
-
-            String cat = ((TextView)v).getText().toString();
-            consoleAdapter.setCategoryFilter(cat);
-            refreshUI.run();
-        };
-
-        for (TextView chip : allChips) {
-            chip.setOnClickListener(chipClickListener);
-        }
-
-        dialog.setContentView(sheet);
-        dialog.show();
-    }
-
     private void setupAspectRatioSpinner() {
         if (spnAspectRatio == null) return;
         String[] ratios = new String[]{
@@ -498,7 +315,6 @@ public class MainActivity extends AppCompatActivity implements LiveLogManager.Lo
         headlessAudioBridge = new HeadlessAudioBridge(this, headlessAudioWebView);
         webAppInterface.setAudioBridge(headlessAudioBridge);
 
-        // Ensure Android never throttles background JavaScript execution or network calls
         headlessAudioWebView.setLayerType(View.LAYER_TYPE_HARDWARE, null);
 
         WebSettings ws = headlessAudioWebView.getSettings();
@@ -586,11 +402,9 @@ public class MainActivity extends AppCompatActivity implements LiveLogManager.Lo
                         "  } " +
                         "} catch(e) {}";
             headlessAudioWebView.evaluateJavascript(js, null);
-            LiveLogManager.getInstance().ok("PUTER_AUTH", "Token Injected to Headless", "Length: " + clean.length() + " chars (forced: " + force + ")");
         } else {
             if (lastInjectedPuterToken != null) {
                 lastInjectedPuterToken = null;
-                LiveLogManager.getInstance().warn("PUTER_AUTH", "Token Cleared", "AuthManager token is now empty.");
             }
         }
     }
@@ -1337,9 +1151,6 @@ public class MainActivity extends AppCompatActivity implements LiveLogManager.Lo
             }
         } catch (Exception ignored) {}
 
-        LiveLogManager.getInstance().process("PUTER_DISPATCH", "Packaging Payload in Java",
-                "Model: " + activeModelId + " | Network Validated: " + isConnected + " | Prompt Len: " + prompt.length());
-
         JSONArray messagesArray = new JSONArray();
         try {
             List<ChatMessage> history = new ArrayList<>(currentSession.getMessages());
@@ -1385,11 +1196,8 @@ public class MainActivity extends AppCompatActivity implements LiveLogManager.Lo
         boolean isImageGen = isImageGenerationModel(activeModelId);
 
         if (headlessAudioBridge != null) {
-            LiveLogManager.getInstance().info("PUTER_DISPATCH", "Handing to Headless Bridge",
-                    "Dispatching to window.sendPuterChat (Stream: " + !isImageGen + ")");
             headlessAudioBridge.sendPuterChat(messagesArray.toString(), activeModelId, !isImageGen, sysInst, ratio);
         } else {
-            LiveLogManager.getInstance().error("PUTER_DISPATCH", "Bridge Missing", "HeadlessAudioBridge instance is null");
             onPuterGenerationError("Headless worker bridge not available");
         }
     }
@@ -1878,8 +1686,6 @@ public class MainActivity extends AppCompatActivity implements LiveLogManager.Lo
                 currentSession.setSelectedModelId(activeModelId);
                 sessionManager.saveSession(currentSession);
             }
-            LiveLogManager.getInstance().info("PUTER_MODEL", "Model Switched by User",
-                    "Name: " + model.getDisplayName() + " | ID: " + model.getId());
             Toast.makeText(MainActivity.this, "Selected: " + model.getDisplayName(), Toast.LENGTH_SHORT).show();
         });
 
@@ -2423,12 +2229,11 @@ public class MainActivity extends AppCompatActivity implements LiveLogManager.Lo
         });
     }
 
-    // --- PUTER AUTHENTICATION POPUP WITH DEEP TELEMETRY & TOKEN EXTRACTION ---
+    // --- PUTER AUTHENTICATION POPUP & TOKEN EXTRACTION ---
 
     private void toggleAuthMirror() {
         boolean loggedIn = AuthManager.getInstance(this).isLoggedIn();
         if (loggedIn) {
-            LiveLogManager.getInstance().process("PUTER_AUTH", "User Triggered Sign Out", "Purging credentials and session cache.");
             AuthManager.getInstance(this).logout();
             lastInjectedPuterToken = null;
             refreshDropdownUI();
@@ -2436,9 +2241,7 @@ public class MainActivity extends AppCompatActivity implements LiveLogManager.Lo
             if (headlessAudioWebView != null) {
                 headlessAudioWebView.evaluateJavascript("try { localStorage.removeItem('puter.auth.token'); } catch(e){}; if (typeof puter !== 'undefined') { puter.authToken = null; if (puter.auth) puter.auth.signOut(); }", null);
             }
-            LiveLogManager.getInstance().ok("PUTER_AUTH", "Sign Out Complete", "Puter token cleared from AuthManager and headless storage.");
         } else {
-            LiveLogManager.getInstance().process("PUTER_AUTH", "Sign In Selected", "Launching OAuth Popup window.");
             openPuterAuthDialog();
         }
     }
@@ -2461,7 +2264,6 @@ public class MainActivity extends AppCompatActivity implements LiveLogManager.Lo
         closeButton.setBackgroundColor(Color.parseColor("#1a73e8"));
         closeButton.setTextColor(Color.WHITE);
         closeButton.setOnClickListener(v -> {
-            LiveLogManager.getInstance().warn("PUTER_AUTH", "Manual Window Close", "User tapped Close Button. Inspecting storage for token...");
             CookieManager.getInstance().flush();
             extractTokensFromWebView(popupWebView, true);
         });
@@ -2490,7 +2292,6 @@ public class MainActivity extends AppCompatActivity implements LiveLogManager.Lo
         popupWebView.addJavascriptInterface(new Object() {
             @JavascriptInterface
             public void onAuthMessageReceived(String rawData) {
-                LiveLogManager.getInstance().ok("PUTER_AUTH", "PostMessage Captured", "Raw: " + rawData);
                 runOnUiThread(() -> extractTokensFromWebView(popupWebView, true));
             }
 
@@ -2498,7 +2299,6 @@ public class MainActivity extends AppCompatActivity implements LiveLogManager.Lo
             public void onTokenExtracted(String token) {
                 if (token != null && !token.trim().isEmpty()) {
                     String clean = token.replace("\"", "").replace("'", "").trim();
-                    LiveLogManager.getInstance().ok("PUTER_AUTH", "Token via JS Bridge", "Token len: " + clean.length());
                     AuthManager.getInstance(MainActivity.this).saveAuthToken(clean);
                     syncPuterTokenToHeadless(true);
                     runOnUiThread(() -> completePuterAuth());
@@ -2509,7 +2309,6 @@ public class MainActivity extends AppCompatActivity implements LiveLogManager.Lo
         popupWebView.setWebChromeClient(new WebChromeClient() {
             @Override
             public void onCloseWindow(WebView window) {
-                LiveLogManager.getInstance().ok("PUTER_AUTH", "SDK Issued window.close()", "Finalizing auth extraction.");
                 runOnUiThread(() -> extractTokensFromWebView(popupWebView, true));
             }
         });
@@ -2537,7 +2336,6 @@ public class MainActivity extends AppCompatActivity implements LiveLogManager.Lo
             @Override
             public void onPageStarted(WebView view, String url, Bitmap favicon) {
                 super.onPageStarted(view, url, favicon);
-                LiveLogManager.getInstance().process("PUTER_AUTH", "OAuth Page Loading", "URL: " + url);
                 view.evaluateJavascript(openerPolyfillScript, null);
                 checkAuthRedirect(url, view);
             }
@@ -2558,7 +2356,6 @@ public class MainActivity extends AppCompatActivity implements LiveLogManager.Lo
             @Override
             public void onPageFinished(WebView view, String url) {
                 super.onPageFinished(view, url);
-                LiveLogManager.getInstance().ok("PUTER_AUTH", "OAuth Page Finished", "URL: " + url);
                 view.evaluateJavascript(openerPolyfillScript, null);
                 CookieManager.getInstance().flush();
 
@@ -2571,7 +2368,6 @@ public class MainActivity extends AppCompatActivity implements LiveLogManager.Lo
                 AuthManager auth = AuthManager.getInstance(MainActivity.this);
                 if (auth.isAuthCallback(url)) {
                     isPuterAuthProcessing = true;
-                    LiveLogManager.getInstance().ok("PUTER_AUTH", "Callback Detected", "Callback URL matched: " + url);
                     extractTokensFromWebView(view, true);
                     return true;
                 }
@@ -2620,7 +2416,6 @@ public class MainActivity extends AppCompatActivity implements LiveLogManager.Lo
                             key.equalsIgnoreCase("puter-auth")) {
 
                             if (!val.isEmpty()) {
-                                LiveLogManager.getInstance().ok("PUTER_AUTH", "Token Discovered in Cookies", "Key [" + key + "] len: " + val.length());
                                 AuthManager.getInstance(MainActivity.this).saveAuthToken(val);
                                 syncPuterTokenToHeadless(true);
                                 if (finalizeOnFound) {
@@ -2631,13 +2426,8 @@ public class MainActivity extends AppCompatActivity implements LiveLogManager.Lo
                         }
                     }
                 }
-                LiveLogManager.getInstance().info("PUTER_AUTH", "Cookies Scanned", "Keys: " + foundKeys);
-            } else {
-                LiveLogManager.getInstance().warn("PUTER_AUTH", "Cookie Jar Empty", "CookieManager returned null/empty for puter.com");
             }
-        } catch (Exception e) {
-            LiveLogManager.getInstance().error("PUTER_AUTH", "Cookie Scan Error", e.getMessage());
-        }
+        } catch (Exception ignored) {}
 
         // 2. Query localStorage directly via JavaScript
         String jsQuery = "(function(){" +
@@ -2653,7 +2443,6 @@ public class MainActivity extends AppCompatActivity implements LiveLogManager.Lo
             if (val != null && !val.equals("null") && !val.trim().isEmpty()) {
                 String clean = val.replace("\"", "").replace("'", "").trim();
                 if (!clean.isEmpty()) {
-                    LiveLogManager.getInstance().ok("PUTER_AUTH", "Token Extracted from LocalStorage", "Len: " + clean.length());
                     AuthManager.getInstance(MainActivity.this).saveAuthToken(clean);
                     syncPuterTokenToHeadless(true);
                     if (finalizeOnFound) {
@@ -2676,13 +2465,6 @@ public class MainActivity extends AppCompatActivity implements LiveLogManager.Lo
         AuthManager auth = AuthManager.getInstance(MainActivity.this);
         auth.handleAuthCallback("https://puter.com/app");
         auth.setLoggedIn(true);
-
-        String currentToken = auth.getAuthToken();
-        if (currentToken != null && !currentToken.trim().isEmpty()) {
-            LiveLogManager.getInstance().ok("PUTER_AUTH", "Authentication Verified", "Token active in AuthManager (length: " + currentToken.length() + ")");
-        } else {
-            LiveLogManager.getInstance().warn("PUTER_AUTH", "Login Finished Without Token", "Session marked logged-in, but token remains empty.");
-        }
 
         runOnUiThread(() -> {
             if (puterAuthDialog != null && puterAuthDialog.isShowing()) {
