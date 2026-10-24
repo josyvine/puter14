@@ -39,8 +39,15 @@ let isPuterChatAborted = false;
 let lastSyncedTokenToNative = null;
 
 window.startCommentarySession = function(scriptText, personaPrompt) {
-    if (isSessionActive) {
-        window.stopCommentarySession();
+    if (isSessionActive || liveWs) {
+        isSessionActive = false;
+        cleanupAudio();
+        if (liveWs) {
+            liveWs.onclose = null;
+            liveWs.onerror = null;
+            try { liveWs.close(); } catch(e) {}
+            liveWs = null;
+        }
     }
     const bridge = getBridge();
     const apiKey = bridge ? bridge.getGeminiApiKey() : "";
@@ -108,7 +115,9 @@ window.startCommentarySession = function(scriptText, personaPrompt) {
                                 voiceName: voiceName || "Puck"
                             }
                         }
-                    }
+                    },
+                    inputAudioTranscription: {},
+                    outputAudioTranscription: {}
                 },
                 systemInstruction: {
                     parts: [{ text: currentPersona }]
@@ -175,26 +184,36 @@ window.startCommentarySession = function(scriptText, personaPrompt) {
                         bridge.onLiveCommentaryText("⚡ [Interrupted]");
                     }
                 }
+
+                // 1. Native Cloud User Voice Transcription -> RIGHT bubble
+                if (content.inputTranscription && content.inputTranscription.text) {
+                    const userSpokenText = content.inputTranscription.text.trim();
+                    if (userSpokenText.length > 0 && bridge && bridge.onLiveUserTranscript) {
+                        bridge.onLiveUserTranscript(userSpokenText);
+                    }
+                }
+
+                // 2. Native Cloud Bot Voice Transcription -> LEFT bubble
+                if (content.outputTranscription && content.outputTranscription.text) {
+                    let botSpokenText = content.outputTranscription.text.trim();
+                    botSpokenText = botSpokenText.replace(/\*\*[^*]*\*\*/g, '').replace(/\*/g, '').trim();
+                    if (botSpokenText.length > 0 && bridge && bridge.onLiveCommentaryText) {
+                        bridge.onLiveCommentaryText(botSpokenText);
+                    }
+                }
+
                 if (content.modelTurn && content.modelTurn.parts) {
                     for (const part of content.modelTurn.parts) {
-                        // Discard internal thought parts so planning headers are never sent to native
-                        if (part.thought) {
-                            continue;
-                        }
+                        // Extract any streamed text response
                         if (part.text) {
                             let text = part.text;
-
-                            // 1. Completely strip out any thoughts or headers enclosed in double asterisks
                             text = text.replace(/\*\*[^*]*\*\*/g, '');
-
-                            // 2. Clean out planning prefixes and stray asterisks
                             text = text.replace(/Acknowledge [^\n]+\n?/gi, '')
                                        .replace(/I've registered [^\n]+\n?/gi, '')
                                        .replace(/My next step [^\n]+\n?/gi, '')
                                        .replace(/\*/g, '')
                                        .trim();
 
-                            // 3. Dispatch ONLY clean spoken words to native (renders on LEFT side)
                             if (text.length > 0 && bridge && bridge.onLiveCommentaryText) {
                                 bridge.onLiveCommentaryText(text);
                             }
@@ -402,7 +421,6 @@ function initSpeechRecognition() {
                         const cleanUser = text.replace(/\*\*[^*]*\*\*/g, '').replace(/\*/g, '').trim();
                         if (cleanUser.length > 0) {
                             const bridge = getBridge();
-                            // Dispatches clean user speech to native (renders on RIGHT side)
                             if (bridge && bridge.onLiveUserTranscript) {
                                 bridge.onLiveUserTranscript(cleanUser);
                             } else if (bridge && bridge.onLiveCommentaryText) {
