@@ -115,9 +115,7 @@ window.startCommentarySession = function(scriptText, personaPrompt) {
                                 voiceName: voiceName || "Puck"
                             }
                         }
-                    },
-                    inputAudioTranscription: {},
-                    outputAudioTranscription: {}
+                    }
                 },
                 systemInstruction: {
                     parts: [{ text: currentPersona }]
@@ -185,26 +183,9 @@ window.startCommentarySession = function(scriptText, personaPrompt) {
                     }
                 }
 
-                // 1. Native Cloud User Voice Transcription -> RIGHT bubble
-                if (content.inputTranscription && content.inputTranscription.text) {
-                    const userSpokenText = content.inputTranscription.text.trim();
-                    if (userSpokenText.length > 0 && bridge && bridge.onLiveUserTranscript) {
-                        bridge.onLiveUserTranscript(userSpokenText);
-                    }
-                }
-
-                // 2. Native Cloud Bot Voice Transcription -> LEFT bubble
-                if (content.outputTranscription && content.outputTranscription.text) {
-                    let botSpokenText = content.outputTranscription.text.trim();
-                    botSpokenText = botSpokenText.replace(/\*\*[^*]*\*\*/g, '').replace(/\*/g, '').trim();
-                    if (botSpokenText.length > 0 && bridge && bridge.onLiveCommentaryText) {
-                        bridge.onLiveCommentaryText(botSpokenText);
-                    }
-                }
-
                 if (content.modelTurn && content.modelTurn.parts) {
                     for (const part of content.modelTurn.parts) {
-                        // Extract any streamed text response
+                        // Extract streamed text response and clean internal thought headers
                         if (part.text) {
                             let text = part.text;
                             text = text.replace(/\*\*[^*]*\*\*/g, '');
