@@ -125,13 +125,6 @@ public class MainActivity extends AppCompatActivity {
     private TextView orbitStar1, orbitStar2, orbitStar3;
     private ImageButton btnSendMessage;
 
-    // Sticky Code Block Header Overlay
-    private LinearLayout stickyCodeHeader;
-    private TextView tvStickyLanguage;
-    private TextView btnStickyPreview;
-    private TextView btnStickyToggleVisibility;
-    private TextView btnStickyCopy;
-
     // Floating Accordion and Dropdown Cards
     private CardView accordionMenuCard;
     private RecyclerView rvAccordionModels;
@@ -230,7 +223,6 @@ public class MainActivity extends AppCompatActivity {
         setupResultLaunchers();
         loadModels();
         setupChatTimeline();
-        setupStickyCodeHeader();
         setupStagedAttachments();
         setupInputDock();
         setupHeaderAndDropdownActions();
@@ -374,7 +366,6 @@ public class MainActivity extends AppCompatActivity {
 
             @Override
             public void onCommentaryFinished() {
-                // Finalize the current active bot bubble without prematurely terminating the live session
                 runOnUiThread(() -> {
                     if (currentActiveLiveBotMsg != null) {
                         currentActiveLiveBotMsg.setStreaming(false);
@@ -809,116 +800,6 @@ public class MainActivity extends AppCompatActivity {
             gestureDetector.onTouchEvent(event);
             return false;
         });
-    }
-
-    /**
-     * Sets up a true Sticky Code Header pinned over the chat timeline.
-     * When any code block is scrolling through the top edge, this header pins at the top
-     * from the beginning of the code block until the end of the code block.
-     */
-    private void setupStickyCodeHeader() {
-        if (chatRootLayout == null || rvChatTimeline == null) return;
-
-        View inflated = LayoutInflater.from(this).inflate(R.layout.item_chat_code_block, chatRootLayout, false);
-        stickyCodeHeader = inflated.findViewById(R.id.llCodeHeader);
-        if (stickyCodeHeader == null) return;
-
-        ((ViewGroup) inflated).removeView(stickyCodeHeader);
-
-        tvStickyLanguage = stickyCodeHeader.findViewById(R.id.tvCodeLanguage);
-        btnStickyPreview = stickyCodeHeader.findViewById(R.id.btnPreviewCode);
-        btnStickyToggleVisibility = stickyCodeHeader.findViewById(R.id.btnToggleCodeVisibility);
-        btnStickyCopy = stickyCodeHeader.findViewById(R.id.btnCopyCode);
-
-        stickyCodeHeader.setVisibility(View.GONE);
-        stickyCodeHeader.setElevation(16f);
-
-        CoordinatorLayout.LayoutParams lp = new CoordinatorLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-        );
-        chatRootLayout.addView(stickyCodeHeader, lp);
-
-        rvChatTimeline.addOnScrollListener(new RecyclerView.OnScrollListener() {
-            @Override
-            public void onScrolled(@NonNull RecyclerView recyclerView, int dx, int dy) {
-                updateStickyCodeHeader();
-            }
-        });
-    }
-
-    /**
-     * Evaluates visible items in rvChatTimeline and pins the header
-     * from the start of the code box until the very end.
-     */
-    private void updateStickyCodeHeader() {
-        if (stickyCodeHeader == null || rvChatTimeline == null) return;
-
-        int topBoundary = rvChatTimeline.getTop();
-        View activeCodeBlockItem = null;
-
-        for (int i = 0; i < rvChatTimeline.getChildCount(); i++) {
-            View child = rvChatTimeline.getChildAt(i);
-            View codeBlockRoot = child.findViewById(R.id.llCodeBlockRoot);
-            if (codeBlockRoot != null) {
-                int childTop = child.getTop();
-                int childBottom = child.getBottom();
-
-                // Active if the code block starts above or at the top boundary, but hasn't fully scrolled past
-                if (childTop <= topBoundary && childBottom > topBoundary) {
-                    activeCodeBlockItem = child;
-                    break;
-                }
-            }
-        }
-
-        if (activeCodeBlockItem != null) {
-            TextView tvLang = activeCodeBlockItem.findViewById(R.id.tvCodeLanguage);
-            TextView btnPrev = activeCodeBlockItem.findViewById(R.id.btnPreviewCode);
-            TextView btnToggle = activeCodeBlockItem.findViewById(R.id.btnToggleCodeVisibility);
-            TextView btnCopy = activeCodeBlockItem.findViewById(R.id.btnCopyCode);
-
-            if (tvLang != null && tvStickyLanguage != null) {
-                tvStickyLanguage.setText(tvLang.getText());
-            }
-
-            if (btnPrev != null && btnStickyPreview != null) {
-                btnStickyPreview.setVisibility(btnPrev.getVisibility());
-                btnStickyPreview.setOnClickListener(v -> btnPrev.performClick());
-            }
-
-            if (btnToggle != null && btnStickyToggleVisibility != null) {
-                btnStickyToggleVisibility.setText(btnToggle.getText());
-                btnStickyToggleVisibility.setOnClickListener(v -> {
-                    btnToggle.performClick();
-                    btnStickyToggleVisibility.setText(btnToggle.getText());
-                });
-            }
-
-            if (btnCopy != null && btnStickyCopy != null) {
-                btnStickyCopy.setOnClickListener(v -> btnCopy.performClick());
-            }
-
-            stickyCodeHeader.setVisibility(View.VISIBLE);
-
-            int headerHeight = stickyCodeHeader.getHeight();
-            if (headerHeight == 0) {
-                stickyCodeHeader.measure(
-                    View.MeasureSpec.makeMeasureSpec(rvChatTimeline.getWidth(), View.MeasureSpec.EXACTLY),
-                    View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED)
-                );
-                headerHeight = stickyCodeHeader.getMeasuredHeight();
-            }
-
-            int remainingHeight = activeCodeBlockItem.getBottom() - topBoundary;
-            if (remainingHeight < headerHeight) {
-                stickyCodeHeader.setTranslationY(topBoundary - (headerHeight - remainingHeight));
-            } else {
-                stickyCodeHeader.setTranslationY(topBoundary);
-            }
-        } else {
-            stickyCodeHeader.setVisibility(View.GONE);
-        }
     }
 
     private void speakAssistantWithProgress(String text, Runnable onFinished) {
